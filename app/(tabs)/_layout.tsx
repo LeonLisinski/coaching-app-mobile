@@ -1,35 +1,60 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Tabs } from 'expo-router'
+import { CheckSquare, Dumbbell, Home, MessageSquare, UtensilsCrossed } from 'lucide-react-native'
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
+export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
         headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
+        tabBarActiveTintColor: '#3b82f6',
+        tabBarInactiveTintColor: '#9ca3af',
+        tabBarStyle: {
+          backgroundColor: 'white',
+          borderTopColor: '#f3f4f6',
+          paddingBottom: 5,
+          height: 60,
+        },
+        tabBarLabelStyle: {
+          fontSize: 11,
+          fontWeight: '500',
+        }
+      }}
+    >
+      <Tabs.Screen
+        name="1-training"
+        options={{
+          title: 'Trening',
+          tabBarIcon: ({ color }) => <Dumbbell size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="2-nutrition"
+        options={{
+          title: 'Prehrana',
+          tabBarIcon: ({ color }) => <UtensilsCrossed size={22} color={color} />,
+        }}
+      />
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: 'Početna',
+          tabBarIcon: ({ color }) => <Home size={22} color={color} />,
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="4-chat"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: 'Chat',
+          tabBarIcon: ({ color }) => <MessageSquare size={22} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="5-checkin"
+        options={{
+          title: 'Check-in',
+          tabBarIcon: ({ color }) => <CheckSquare size={22} color={color} />,
         }}
       />
     </Tabs>
-  );
+  )
 }
