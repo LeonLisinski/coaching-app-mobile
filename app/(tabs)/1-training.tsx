@@ -1,6 +1,9 @@
 import { supabase } from '@/lib/supabase'
-import { useEffect, useState } from 'react'
-import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import { useEffect, useRef, useState } from 'react'
+import {
+  ActivityIndicator, Alert, Animated, KeyboardAvoidingView, Linking, Modal,
+  Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
+} from 'react-native'
 
 type PlanExercise = {
   exercise_id: string
@@ -9,6 +12,8 @@ type PlanExercise = {
   reps: string
   rest_seconds: number
   notes: string
+  description?: string
+  video_url?: string
 }
 
 type PlanDay = {
@@ -64,6 +69,279 @@ const getWeekEnd = () => {
   return sunday.toISOString().split('T')[0]
 }
 
+// ── Rest Timer ────────────────────────────────────────────────────────────────
+function RestTimer({ seconds, onDone }: { seconds: number; onDone: () => void }) {
+  const [remaining, setRemaining] = useState(seconds)
+  const progress = useRef(new Animated.Value(1)).current
+
+  useEffect(() => {
+    Animated.timing(progress, {
+      toValue: 0,
+      duration: seconds * 1000,
+      useNativeDriver: false,
+    }).start()
+
+    const interval = setInterval(() => {
+      setRemaining(r => {
+        if (r <= 1) { clearInterval(interval); onDone(); return 0 }
+        return r - 1
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [])
+
+  const barWidth = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] })
+
+  return (
+    <View style={timerStyles.container}>
+      <Text style={timerStyles.label}>Odmor</Text>
+      <Text style={timerStyles.countdown}>{remaining}s</Text>
+      <View style={timerStyles.bar}>
+        <Animated.View style={[timerStyles.fill, { width: barWidth }]} />
+      </View>
+      <TouchableOpacity onPress={onDone} style={timerStyles.skipBtn}>
+        <Text style={timerStyles.skipText}>Preskoči</Text>
+      </TouchableOpacity>
+    </View>
+  )
+}
+
+const timerStyles = StyleSheet.create({
+  container: {
+    position: 'absolute', bottom: 88, left: 16, right: 16,
+    backgroundColor: '#1e3a5f', borderRadius: 16, padding: 16,
+    alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2, shadowRadius: 12, elevation: 8, zIndex: 100,
+  },
+  label: { fontSize: 11, color: 'rgba(255,255,255,0.6)', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 },
+  countdown: { fontSize: 36, fontWeight: '800', color: 'white', marginBottom: 10 },
+  bar: { width: '100%', height: 4, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99, overflow: 'hidden', marginBottom: 10 },
+  fill: { height: '100%', backgroundColor: '#22c55e', borderRadius: 99 },
+  skipBtn: { paddingHorizontal: 20, paddingVertical: 6 },
+  skipText: { fontSize: 13, color: 'rgba(255,255,255,0.5)', fontWeight: '600' },
+})
+
+// ── Exercise Detail Modal ─────────────────────────────────────────────────────
+function ExerciseDetailModal({ exercise, onClose }: { exercise: PlanExercise; onClose: () => void }) {
+  return (
+    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <View style={detailStyles.container}>
+        <View style={detailStyles.header}>
+          <Text style={detailStyles.title}>{exercise.name}</Text>
+          <TouchableOpacity onPress={onClose} style={detailStyles.closeBtn}>
+            <Text style={detailStyles.closeText}>Zatvori</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={detailStyles.scroll} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
+          {/* Target */}
+          <View style={detailStyles.pill}>
+            <Text style={detailStyles.pillText}>
+              {exercise.sets} serije × {exercise.reps} ponavljanja
+              {exercise.rest_seconds ? `  ·  ${exercise.rest_seconds}s odmor` : ''}
+            </Text>
+          </View>
+
+          {/* Description */}
+          {exercise.description ? (
+            <View style={detailStyles.section}>
+              <Text style={detailStyles.sectionLabel}>Opis</Text>
+              <Text style={detailStyles.sectionText}>{exercise.description}</Text>
+            </View>
+          ) : null}
+
+          {/* Notes */}
+          {exercise.notes ? (
+            <View style={detailStyles.section}>
+              <Text style={detailStyles.sectionLabel}>Napomena trenera</Text>
+              <View style={detailStyles.noteBox}>
+                <Text style={detailStyles.noteText}>{exercise.notes}</Text>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Video link */}
+          {exercise.video_url ? (
+            <View style={detailStyles.section}>
+              <Text style={detailStyles.sectionLabel}>Video</Text>
+              <TouchableOpacity style={detailStyles.videoBtn}
+                onPress={() => exercise.video_url && Linking.openURL(exercise.video_url)}>
+                <Text style={detailStyles.videoBtnText}>▶  Otvori video</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </ScrollView>
+      </View>
+    </Modal>
+  )
+}
+
+const detailStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f3f4f6' },
+  header: {
+    backgroundColor: '#1e3a5f', paddingTop: 24, paddingHorizontal: 20, paddingBottom: 20,
+    flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between',
+  },
+  title: { fontSize: 22, fontWeight: '800', color: 'white', flex: 1, marginRight: 16 },
+  closeBtn: { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99, paddingHorizontal: 14, paddingVertical: 7 },
+  closeText: { color: 'white', fontSize: 14, fontWeight: '600' },
+  scroll: { flex: 1 },
+  pill: { backgroundColor: '#eff6ff', borderRadius: 99, alignSelf: 'flex-start', paddingHorizontal: 14, paddingVertical: 7, marginBottom: 20 },
+  pillText: { fontSize: 13, fontWeight: '600', color: '#3b82f6' },
+  section: { marginBottom: 20 },
+  sectionLabel: { fontSize: 11, fontWeight: '700', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 8 },
+  sectionText: { fontSize: 15, color: '#374151', lineHeight: 22 },
+  noteBox: { backgroundColor: '#fffbeb', borderRadius: 12, padding: 14, borderLeftWidth: 3, borderLeftColor: '#f59e0b' },
+  noteText: { fontSize: 14, color: '#78350f', lineHeight: 20 },
+  videoBtn: { backgroundColor: '#3b82f6', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  videoBtnText: { color: 'white', fontSize: 15, fontWeight: '700' },
+})
+
+// ── Finish Confirm Modal ──────────────────────────────────────────────────────
+function FinishModal({
+  exerciseLogs,
+  allCompleted,
+  onConfirm,
+  onCancel,
+}: {
+  exerciseLogs: ExerciseLog[]
+  allCompleted: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const incomplete = exerciseLogs.flatMap(ex =>
+    ex.sets.filter(s => !s.completed).map(s => ({ name: ex.name, set: s.set_number }))
+  )
+
+  return (
+    <Modal visible animationType="fade" transparent onRequestClose={onCancel}>
+      <View style={finishStyles.overlay}>
+        <View style={finishStyles.card}>
+          <Text style={finishStyles.title}>Završiti trening?</Text>
+
+          {incomplete.length > 0 ? (
+            <>
+              <View style={finishStyles.warningBox}>
+                <Text style={finishStyles.warningTitle}>⚠️  Nisu sve serije završene</Text>
+                {incomplete.slice(0, 4).map((item, i) => (
+                  <Text key={i} style={finishStyles.warningItem}>
+                    · {item.name} – serija {item.set}
+                  </Text>
+                ))}
+                {incomplete.length > 4 && (
+                  <Text style={finishStyles.warningItem}>· i još {incomplete.length - 4} serija...</Text>
+                )}
+              </View>
+              <Text style={finishStyles.sub}>Možeš završiti i bez svih serija, ili se vrati i dovrši ih.</Text>
+            </>
+          ) : (
+            <Text style={finishStyles.sub}>Sve serije su završene! Spremi trening? 💪</Text>
+          )}
+
+          <View style={finishStyles.btns}>
+            <TouchableOpacity onPress={onCancel} style={finishStyles.cancelBtn}>
+              <Text style={finishStyles.cancelText}>Nastavi trening</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={onConfirm} style={finishStyles.confirmBtn}>
+              <Text style={finishStyles.confirmText}>Spremi</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+const finishStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  card: { backgroundColor: 'white', borderRadius: 20, padding: 24, width: '100%' },
+  title: { fontSize: 20, fontWeight: '800', color: '#111827', marginBottom: 16, textAlign: 'center' },
+  warningBox: { backgroundColor: '#fff7ed', borderRadius: 12, padding: 14, marginBottom: 12, borderLeftWidth: 3, borderLeftColor: '#f97316' },
+  warningTitle: { fontSize: 13, fontWeight: '700', color: '#92400e', marginBottom: 8 },
+  warningItem: { fontSize: 13, color: '#78350f', marginBottom: 2 },
+  sub: { fontSize: 14, color: '#6b7280', textAlign: 'center', marginBottom: 20, lineHeight: 20 },
+  btns: { flexDirection: 'row', gap: 10 },
+  cancelBtn: { flex: 1, backgroundColor: '#f3f4f6', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  cancelText: { fontSize: 15, fontWeight: '600', color: '#374151' },
+  confirmBtn: { flex: 1, backgroundColor: '#22c55e', borderRadius: 12, paddingVertical: 14, alignItems: 'center' },
+  confirmText: { fontSize: 15, fontWeight: '700', color: 'white' },
+})
+
+// ── Update Confirm Modal ──────────────────────────────────────────────────────
+function UpdateModal({
+  exerciseLogs,
+  onConfirm,
+  onCancel,
+}: {
+  exerciseLogs: ExerciseLog[]
+  onConfirm: (logs: ExerciseLog[]) => void
+  onCancel: () => void
+}) {
+  const [logs, setLogs] = useState<ExerciseLog[]>(exerciseLogs.map(ex => ({
+    ...ex,
+    sets: ex.sets.map(s => ({ ...s }))
+  })))
+
+  const updateSet = (exId: string, setIdx: number, field: 'reps' | 'weight', value: string) => {
+    setLogs(prev => prev.map(ex =>
+      ex.exercise_id === exId
+        ? { ...ex, sets: ex.sets.map((s, i) => i === setIdx ? { ...s, [field]: value } : s) }
+        : ex
+    ))
+  }
+
+  return (
+    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onCancel}>
+      <View style={{ flex: 1, backgroundColor: '#f3f4f6' }}>
+        <View style={[detailStyles.header, { flexDirection: 'column', alignItems: 'flex-start', gap: 8 }]}>
+          <TouchableOpacity onPress={onCancel} style={detailStyles.closeBtn}>
+            <Text style={detailStyles.closeText}>Odustani</Text>
+          </TouchableOpacity>
+          <Text style={[detailStyles.title, { marginRight: 0 }]}>Ažuriraj trening</Text>
+          <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>Sprema se samo jednom dnevno — ažurira postojeći zapis</Text>
+        </View>
+
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
+          {logs.map(ex => (
+            <View key={ex.exercise_id} style={[styles.exerciseCard, { marginHorizontal: 0 }]}>
+              <Text style={styles.exerciseCardName}>{ex.name}</Text>
+              <View style={[styles.setsHeader, { marginTop: 10 }]}>
+                <Text style={[styles.setsCol, { flex: 0.5 }]}>#</Text>
+                <Text style={[styles.setsCol, { flex: 1 }]}>Kg</Text>
+                <Text style={[styles.setsCol, { flex: 1 }]}>Reps</Text>
+              </View>
+              {ex.sets.map((set, i) => (
+                <View key={i} style={[styles.setRow, { marginBottom: 6 }]}>
+                  <Text style={[styles.setsCol, { flex: 0.5, fontWeight: '700', color: '#6b7280', textAlign: 'center' }]}>{i + 1}</Text>
+                  <TextInput
+                    style={[styles.setInput, { flex: 1 }]}
+                    value={set.weight}
+                    onChangeText={v => updateSet(ex.exercise_id, i, 'weight', v)}
+                    keyboardType="decimal-pad"
+                  />
+                  <TextInput
+                    style={[styles.setInput, { flex: 1 }]}
+                    value={set.reps}
+                    onChangeText={v => updateSet(ex.exercise_id, i, 'reps', v)}
+                    keyboardType="number-pad"
+                  />
+                </View>
+              ))}
+            </View>
+          ))}
+        </ScrollView>
+
+        <View style={styles.saveBar}>
+          <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#f59e0b' }]} onPress={() => onConfirm(logs)}>
+            <Text style={styles.saveBtnText}>Spremi ažurirane vrijednosti</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
+// ── Main Screen ───────────────────────────────────────────────────────────────
 export default function TrainingScreen() {
   const [plan, setPlan] = useState<WorkoutPlan | null>(null)
   const [loading, setLoading] = useState(true)
@@ -73,6 +351,17 @@ export default function TrainingScreen() {
   const [completedThisWeek, setCompletedThisWeek] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+
+  // Timer
+  const [restTimer, setRestTimer] = useState<{ exerciseId: string; seconds: number } | null>(null)
+  // Detail modal
+  const [detailExercise, setDetailExercise] = useState<PlanExercise | null>(null)
+  // Finish confirm
+  const [showFinish, setShowFinish] = useState(false)
+  // Update modal (post-save edit)
+  const [showUpdate, setShowUpdate] = useState(false)
+  const [savedLogs, setSavedLogs] = useState<ExerciseLog[]>([])
+  const [existingLogId, setExistingLogId] = useState<string | null>(null)
 
   useEffect(() => { fetchPlan() }, [])
 
@@ -96,76 +385,81 @@ export default function TrainingScreen() {
     if (!assigned) return setLoading(false)
 
     const { data: planData } = await supabase
-      .from('workout_plans')
-      .select('id, name, description, days')
-      .eq('id', assigned.workout_plan_id)
-      .single()
+      .from('workout_plans').select('id, name, description, days')
+      .eq('id', assigned.workout_plan_id).single()
 
     if (!planData) return setLoading(false)
 
-    // Dohvati završene treninge ovaj tjedan
     const { data: weekLogs } = await supabase
-      .from('workout_logs')
-      .select('day_name, date')
-      .eq('client_id', clientData.id)
-      .eq('plan_id', planData.id)
-      .gte('date', getWeekStart())
-      .lte('date', getWeekEnd())
+      .from('workout_logs').select('day_name, date')
+      .eq('client_id', clientData.id).eq('plan_id', planData.id)
+      .gte('date', getWeekStart()).lte('date', getWeekEnd())
 
-    const doneThisWeek = weekLogs?.map(l => l.day_name) || []
-    setCompletedThisWeek(doneThisWeek)
-
+    setCompletedThisWeek(weekLogs?.map(l => l.day_name) || [])
     setPlan({
-      id: planData.id,
-      name: planData.name,
-      description: planData.description,
-      days: planData.days || [],
-      assigned_at: assigned.assigned_at,
-      notes: assigned.notes,
-      client_id: clientData.id,
-      trainer_id: clientData.trainer_id,
+      id: planData.id, name: planData.name, description: planData.description,
+      days: planData.days || [], assigned_at: assigned.assigned_at,
+      notes: assigned.notes, client_id: clientData.id, trainer_id: clientData.trainer_id,
     })
     setLoading(false)
   }
 
   const openDay = async (day: PlanDay) => {
-    setActiveDay(day)
     setSaved(false)
+    setExistingLogId(null)
 
-    const logs: ExerciseLog[] = day.exercises.map(ex => ({
+    if (!plan) return
+
+    // Fetch fresh description + video_url directly from exercises table
+    // (plan.days JSONB only stores exercise_id, not description/video_url)
+    const exerciseIds = day.exercises.map(e => e.exercise_id).filter(Boolean)
+    let freshDetails: Record<string, { description?: string; video_url?: string }> = {}
+    if (exerciseIds.length > 0) {
+      const { data: exData } = await supabase
+        .from('exercises')
+        .select('id, description, video_url')
+        .in('id', exerciseIds)
+      exData?.forEach(e => { freshDetails[e.id] = { description: e.description || undefined, video_url: e.video_url || undefined } })
+    }
+
+    const enrichedDay: PlanDay = {
+      ...day,
+      exercises: day.exercises.map(ex => ({
+        ...ex,
+        description: freshDetails[ex.exercise_id]?.description,
+        video_url: freshDetails[ex.exercise_id]?.video_url,
+      }))
+    }
+
+    setActiveDay(enrichedDay)
+
+    const logs: ExerciseLog[] = enrichedDay.exercises.map(ex => ({
       exercise_id: ex.exercise_id,
       name: ex.name,
       sets: Array.from({ length: ex.sets }, (_, i) => ({
-        set_number: i + 1,
-        reps: '',
-        weight: '',
-        completed: false,
+        set_number: i + 1, reps: '', weight: '', completed: false,
       }))
     }))
     setExerciseLogs(logs)
 
-    if (!plan) return
-
     const { data: prevLogs } = await supabase
-      .from('workout_logs')
-      .select('exercises, date')
-      .eq('client_id', plan.client_id)
-      .eq('plan_id', plan.id)
-      .eq('day_name', day.name)
-      .order('date', { ascending: false })
-      .limit(1)
+      .from('workout_logs').select('id, exercises, date')
+      .eq('client_id', plan.client_id).eq('plan_id', plan.id).eq('day_name', day.name)
+      .order('date', { ascending: false }).limit(1)
 
     if (prevLogs && prevLogs.length > 0) {
       const lastMap: Record<string, LastLog> = {}
       const prevExercises: ExerciseLog[] = prevLogs[0].exercises || []
       prevExercises.forEach(ex => {
-        lastMap[ex.exercise_id] = {
-          exercise_id: ex.exercise_id,
-          sets: ex.sets,
-          date: prevLogs[0].date,
-        }
+        lastMap[ex.exercise_id] = { exercise_id: ex.exercise_id, sets: ex.sets, date: prevLogs[0].date }
       })
       setLastLogs(lastMap)
+
+      // If today's log exists, store its id for potential update
+      if (prevLogs[0].date === new Date().toISOString().split('T')[0]) {
+        setExistingLogId(prevLogs[0].id)
+        setSavedLogs(prevExercises)
+      }
     } else {
       setLastLogs({})
     }
@@ -180,48 +474,63 @@ export default function TrainingScreen() {
   }
 
   const toggleSet = (exerciseId: string, setIndex: number) => {
-    setExerciseLogs(prev => prev.map(ex =>
-      ex.exercise_id === exerciseId
-        ? { ...ex, sets: ex.sets.map((s, i) => i === setIndex ? { ...s, completed: !s.completed } : s) }
-        : ex
-    ))
+    setExerciseLogs(prev => prev.map(ex => {
+      if (ex.exercise_id !== exerciseId) return ex
+      const updated = ex.sets.map((s, i) => i === setIndex ? { ...s, completed: !s.completed } : s)
+      const justCompleted = !ex.sets[setIndex].completed
+
+      // Start rest timer if completing a set
+      if (justCompleted) {
+        const planEx = activeDay?.exercises.find(e => e.exercise_id === exerciseId)
+        if (planEx?.rest_seconds) {
+          setRestTimer({ exerciseId, seconds: planEx.rest_seconds })
+        }
+      }
+
+      return { ...ex, sets: updated }
+    }))
   }
 
   const saveWorkout = async () => {
     if (!plan || !activeDay) return
     setSaving(true)
 
-    const { error } = await supabase.from('workout_logs').insert({
-      client_id: plan.client_id,
-      trainer_id: plan.trainer_id,
-      plan_id: plan.id,
-      day_name: activeDay.name,
-      date: new Date().toISOString().split('T')[0],
-      exercises: exerciseLogs,
-    })
+    const today = new Date().toISOString().split('T')[0]
 
-    if (error) {
-      Alert.alert('Greška', error.message)
-      setSaving(false)
-      return
+    // If a log already exists today — update it instead of inserting
+    if (existingLogId) {
+      await supabase.from('workout_logs').update({ exercises: exerciseLogs }).eq('id', existingLogId)
+    } else {
+      const { error } = await supabase.from('workout_logs').insert({
+        client_id: plan.client_id, trainer_id: plan.trainer_id,
+        plan_id: plan.id, day_name: activeDay.name,
+        date: today, exercises: exerciseLogs,
+      })
+      if (error) {
+        Alert.alert('Greška', error.message)
+        setSaving(false)
+        return
+      }
     }
 
     setSaved(true)
-    setCompletedThisWeek(prev => [...prev, activeDay.name])
-
-    setTimeout(() => {
-      setActiveDay(null)
-      setSaved(false)
-    }, 1800)
-
+    setSavedLogs(exerciseLogs)
+    setCompletedThisWeek(prev =>
+      prev.includes(activeDay.name) ? prev : [...prev, activeDay.name]
+    )
     setSaving(false)
   }
 
-  // Koji je sljedeći trening
+  const handleUpdateConfirm = async (updatedLogs: ExerciseLog[]) => {
+    if (!existingLogId) return
+    await supabase.from('workout_logs').update({ exercises: updatedLogs }).eq('id', existingLogId)
+    setSavedLogs(updatedLogs)
+    setShowUpdate(false)
+  }
+
   const getNextDay = () => {
     if (!plan) return null
-    const remaining = plan.days.filter(d => !completedThisWeek.includes(d.name))
-    return remaining[0] || null
+    return plan.days.filter(d => !completedThisWeek.includes(d.name))[0] || null
   }
 
   if (loading) return (
@@ -238,7 +547,7 @@ export default function TrainingScreen() {
     </View>
   )
 
-  // Aktivni trening
+  // ── Active workout session ──
   if (activeDay) {
     return (
       <KeyboardAvoidingView
@@ -272,7 +581,12 @@ export default function TrainingScreen() {
 
             return (
               <View key={ex.exercise_id} style={styles.exerciseCard}>
-                <View style={styles.exerciseCardHeader}>
+                {/* Header — tap for detail */}
+                <TouchableOpacity
+                  style={styles.exerciseCardHeader}
+                  onPress={() => setDetailExercise(ex)}
+                  activeOpacity={0.7}
+                >
                   <View style={styles.exerciseNumBadge}>
                     <Text style={styles.exerciseNumText}>{exIndex + 1}</Text>
                   </View>
@@ -283,7 +597,8 @@ export default function TrainingScreen() {
                       {ex.rest_seconds ? ` · ${ex.rest_seconds}s odmor` : ''}
                     </Text>
                   </View>
-                </View>
+                  <Text style={styles.infoIcon}>ℹ</Text>
+                </TouchableOpacity>
 
                 {last ? (
                   <View style={styles.lastLogRow}>
@@ -345,17 +660,57 @@ export default function TrainingScreen() {
           })}
         </ScrollView>
 
+        {/* Rest timer overlay */}
+        {restTimer && (
+          <RestTimer
+            seconds={restTimer.seconds}
+            onDone={() => setRestTimer(null)}
+          />
+        )}
+
+        {/* Save bar */}
         <View style={styles.saveBar}>
-          <TouchableOpacity
-            style={[styles.saveBtn, saved && styles.saveBtnDone]}
-            onPress={saveWorkout}
-            disabled={saving || saved}
-          >
-            <Text style={styles.saveBtnText}>
-              {saved ? '✓ Trening spremljen!' : saving ? 'Sprema...' : 'Završi trening 💪'}
-            </Text>
-          </TouchableOpacity>
+          {saved ? (
+            <View style={styles.savedBar}>
+              <Text style={styles.savedText}>✓ Trening spremljen!</Text>
+              <TouchableOpacity onPress={() => setShowUpdate(true)} style={styles.updateBtn}>
+                <Text style={styles.updateBtnText}>Ažuriraj vrijednosti</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.saveBtn}
+              onPress={() => setShowFinish(true)}
+              disabled={saving}
+            >
+              <Text style={styles.saveBtnText}>
+                {saving ? 'Sprema...' : 'Završi trening 💪'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
+
+        {/* Modals */}
+        {detailExercise && (
+          <ExerciseDetailModal exercise={detailExercise} onClose={() => setDetailExercise(null)} />
+        )}
+
+        {showFinish && (
+          <FinishModal
+            exerciseLogs={exerciseLogs}
+            allCompleted={exerciseLogs.every(ex => ex.sets.every(s => s.completed))}
+            onConfirm={() => { setShowFinish(false); saveWorkout() }}
+            onCancel={() => setShowFinish(false)}
+          />
+        )}
+
+        {showUpdate && (
+          <UpdateModal
+            exerciseLogs={savedLogs}
+            onConfirm={handleUpdateConfirm}
+            onCancel={() => setShowUpdate(false)}
+          />
+        )}
       </KeyboardAvoidingView>
     )
   }
@@ -363,31 +718,24 @@ export default function TrainingScreen() {
   const nextDay = getNextDay()
   const allDone = plan.days.every(d => completedThisWeek.includes(d.name))
 
-  // Plan overview
+  // ── Plan overview ──
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.headerBg}>
         <Text style={styles.headerLabel}>Aktivni plan</Text>
         <Text style={styles.headerTitle}>{plan.name}</Text>
         {plan.description && <Text style={styles.headerDesc}>{plan.description}</Text>}
-
-        {/* Tjedni progress */}
         <View style={styles.weekProgress}>
           <View style={styles.weekProgressHeader}>
             <Text style={styles.weekProgressLabel}>Ovaj tjedan</Text>
-            <Text style={styles.weekProgressCount}>
-              {completedThisWeek.length} / {plan.days.length}
-            </Text>
+            <Text style={styles.weekProgressCount}>{completedThisWeek.length} / {plan.days.length}</Text>
           </View>
           <View style={styles.weekProgressBar}>
-            <View style={[styles.weekProgressFill, {
-              width: `${(completedThisWeek.length / plan.days.length) * 100}%` as any
-            }]} />
+            <View style={[styles.weekProgressFill, { width: `${(completedThisWeek.length / plan.days.length) * 100}%` as any }]} />
           </View>
         </View>
       </View>
 
-      {/* Sljedeći trening banner */}
       {!allDone && nextDay && (
         <TouchableOpacity style={styles.nextDayBanner} onPress={() => openDay(nextDay)} activeOpacity={0.85}>
           <View>
@@ -419,15 +767,10 @@ export default function TrainingScreen() {
       {plan.days.map((day) => {
         const isDone = completedThisWeek.includes(day.name)
         const isNext = nextDay?.name === day.name
-
         return (
           <TouchableOpacity
             key={day.day_number}
-            style={[
-              styles.dayCard,
-              isDone && styles.dayCardDone,
-              isNext && styles.dayCardNext,
-            ]}
+            style={[styles.dayCard, isDone && styles.dayCardDone, isNext && styles.dayCardNext]}
             onPress={() => openDay(day)}
             activeOpacity={0.85}
           >
@@ -441,10 +784,7 @@ export default function TrainingScreen() {
                 </Text>
               </View>
             </View>
-            {isDone
-              ? <Text style={styles.dayDoneCheck}>✓</Text>
-              : <Text style={styles.dayArrow}>→</Text>
-            }
+            {isDone ? <Text style={styles.dayDoneCheck}>✓</Text> : <Text style={styles.dayArrow}>→</Text>}
           </TouchableOpacity>
         )
       })}
@@ -460,7 +800,6 @@ const styles = StyleSheet.create({
   emptyEmoji: { fontSize: 56, marginBottom: 16 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
-
   headerBg: {
     backgroundColor: '#1e3a5f', paddingTop: 60, paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,
@@ -468,14 +807,12 @@ const styles = StyleSheet.create({
   headerLabel: { fontSize: 12, color: '#93c5fd', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
   headerTitle: { fontSize: 26, fontWeight: '800', color: 'white', marginBottom: 4 },
   headerDesc: { fontSize: 14, color: '#93c5fd', marginBottom: 16 },
-
   weekProgress: { marginTop: 8 },
   weekProgressHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   weekProgressLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
   weekProgressCount: { fontSize: 12, fontWeight: '700', color: 'white' },
   weekProgressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 99, overflow: 'hidden' },
   weekProgressFill: { height: '100%', backgroundColor: '#22c55e', borderRadius: 99 },
-
   nextDayBanner: {
     backgroundColor: '#3b82f6', borderRadius: 16, marginHorizontal: 20, marginBottom: 12,
     padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -484,7 +821,6 @@ const styles = StyleSheet.create({
   nextDayName: { fontSize: 18, fontWeight: '800', color: 'white' },
   nextDayMeta: { fontSize: 12, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
   nextDayArrow: { fontSize: 22, color: 'white' },
-
   allDoneBanner: {
     backgroundColor: '#f0fdf4', borderRadius: 16, marginHorizontal: 20, marginBottom: 12,
     padding: 20, alignItems: 'center', borderWidth: 1, borderColor: '#86efac',
@@ -492,19 +828,16 @@ const styles = StyleSheet.create({
   allDoneEmoji: { fontSize: 36, marginBottom: 8 },
   allDoneTitle: { fontSize: 18, fontWeight: '800', color: '#15803d', marginBottom: 4 },
   allDoneSub: { fontSize: 13, color: '#4ade80' },
-
   notesCard: {
     backgroundColor: '#fffbeb', borderRadius: 14, padding: 14,
     marginHorizontal: 20, marginBottom: 16, borderLeftWidth: 3, borderLeftColor: '#f59e0b',
   },
   notesLabel: { fontSize: 12, fontWeight: '700', color: '#92400e', marginBottom: 4 },
   notesText: { fontSize: 13, color: '#78350f', lineHeight: 20 },
-
   sectionTitle: {
     fontSize: 13, fontWeight: '700', color: '#6b7280',
     textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10, marginHorizontal: 20,
   },
-
   dayCard: {
     backgroundColor: 'white', borderRadius: 16, marginHorizontal: 20, marginBottom: 10,
     padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -521,62 +854,36 @@ const styles = StyleSheet.create({
   dayMeta: { fontSize: 12, color: '#9ca3af' },
   dayArrow: { fontSize: 18, color: '#9ca3af' },
   dayDoneCheck: { fontSize: 18, color: '#22c55e', fontWeight: '700' },
-
   sessionHeader: {
     backgroundColor: '#1e3a5f', paddingTop: 60, paddingHorizontal: 20, paddingBottom: 20,
   },
-  backBtn: {
-    marginBottom: 12,
-    alignSelf: 'flex-start',
-  },
+  backBtn: { marginBottom: 12, alignSelf: 'flex-start' },
   backBtnInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 99,
-    gap: 4,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.15)',
+    paddingHorizontal: 14, paddingVertical: 8, borderRadius: 99, gap: 4,
   },
-  backBtnArrow: {
-    fontSize: 24,
-    color: 'white',
-    lineHeight: 26,
-    fontWeight: '300',
-  },
-  backBtnText: {
-    color: 'white',
-    fontSize: 15,
-    fontWeight: '600',
-  },
+  backBtnArrow: { fontSize: 24, color: 'white', lineHeight: 26, fontWeight: '300' },
+  backBtnText: { color: 'white', fontSize: 15, fontWeight: '600' },
   sessionTitle: { fontSize: 24, fontWeight: '800', color: 'white' },
   sessionDate: { fontSize: 13, color: 'rgba(255,255,255,0.6)', marginTop: 4 },
   sessionScroll: { flex: 1 },
-
   exerciseCard: {
     backgroundColor: 'white', borderRadius: 16, margin: 16, marginBottom: 0,
     padding: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
   },
   exerciseCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 },
-  exerciseNumBadge: {
-    width: 32, height: 32, borderRadius: 10, backgroundColor: '#eff6ff',
-    alignItems: 'center', justifyContent: 'center',
-  },
+  exerciseNumBadge: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#eff6ff', alignItems: 'center', justifyContent: 'center' },
   exerciseNumText: { fontSize: 13, fontWeight: '700', color: '#3b82f6' },
   exerciseCardInfo: { flex: 1 },
   exerciseCardName: { fontSize: 15, fontWeight: '700', color: '#111827' },
   exerciseCardTarget: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
-
-  lastLogRow: {
-    backgroundColor: '#f8fafc', borderRadius: 8, padding: 8, marginBottom: 12,
-  },
+  infoIcon: { fontSize: 18, color: '#d1d5db', paddingHorizontal: 4 },
+  lastLogRow: { backgroundColor: '#f8fafc', borderRadius: 8, padding: 8, marginBottom: 12 },
   lastLogLabel: { fontSize: 11, color: '#9ca3af', marginBottom: 2 },
   lastLogValue: { fontSize: 12, fontWeight: '600', color: '#3b82f6' },
-
   setsHeader: { flexDirection: 'row', paddingHorizontal: 4, marginBottom: 6 },
   setsCol: { fontSize: 11, fontWeight: '600', color: '#9ca3af', textTransform: 'uppercase', textAlign: 'center' },
-
   setRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 6, paddingHorizontal: 4, borderRadius: 8, marginBottom: 4,
@@ -587,23 +894,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8, paddingVertical: 8, fontSize: 15,
     fontWeight: '600', color: '#111827', textAlign: 'center', backgroundColor: 'white',
   },
-  setCheck: {
-    alignItems: 'center', justifyContent: 'center',
-    height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb',
-  },
+  setCheck: { alignItems: 'center', justifyContent: 'center', height: 36, borderRadius: 8, borderWidth: 1, borderColor: '#e5e7eb' },
   setCheckDone: { backgroundColor: '#22c55e', borderColor: '#22c55e' },
   setCheckText: { fontSize: 16, color: '#9ca3af' },
   exerciseNote: { fontSize: 12, color: '#9ca3af', marginTop: 8, fontStyle: 'italic' },
-
   saveBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    padding: 16, backgroundColor: 'white',
-    borderTopWidth: 1, borderTopColor: '#f3f4f6',
+    padding: 16, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#f3f4f6',
   },
-  saveBtn: {
-    backgroundColor: '#3b82f6', borderRadius: 14,
-    paddingVertical: 16, alignItems: 'center',
-  },
-  saveBtnDone: { backgroundColor: '#22c55e' },
+  savedBar: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  savedText: { flex: 1, fontSize: 15, fontWeight: '700', color: '#15803d' },
+  updateBtn: { backgroundColor: '#fef3c7', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10 },
+  updateBtnText: { fontSize: 13, fontWeight: '600', color: '#92400e' },
+  saveBtn: { backgroundColor: '#3b82f6', borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
   saveBtnText: { color: 'white', fontSize: 16, fontWeight: '700' },
 })

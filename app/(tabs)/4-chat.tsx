@@ -1,6 +1,9 @@
 import { supabase } from '@/lib/supabase'
 import { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native'
+import {
+  ActivityIndicator, Image, KeyboardAvoidingView, Linking, Modal,
+  Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
+} from 'react-native'
 
 type Message = {
   id: string
@@ -13,8 +16,140 @@ type Message = {
   reaction?: string | null
 }
 
+type TrainerProfile = {
+  id: string
+  full_name: string
+  avatar_url: string | null
+  bio: string | null
+  phone: string | null
+  email: string | null
+  website: string | null
+  instagram: string | null
+}
+
 const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 
+// ── Trainer Profile Modal ─────────────────────────────────────────────────────
+function TrainerProfileModal({ trainer, onClose }: { trainer: TrainerProfile; onClose: () => void }) {
+  const initials = trainer.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+
+  const openLink = (url: string) => {
+    if (!url) return
+    const full = url.startsWith('http') ? url : `https://${url}`
+    Linking.openURL(full)
+  }
+
+  const openInstagram = () => {
+    if (!trainer.instagram) return
+    const handle = trainer.instagram.replace('@', '').replace('https://instagram.com/', '').replace('https://www.instagram.com/', '')
+    Linking.openURL(`https://instagram.com/${handle}`).catch(() =>
+      Linking.openURL(`instagram://user?username=${handle}`)
+    )
+  }
+
+  const openPhone = () => trainer.phone && Linking.openURL(`tel:${trainer.phone}`)
+  const openEmail = () => trainer.email && Linking.openURL(`mailto:${trainer.email}`)
+
+  return (
+    <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <View style={profileStyles.container}>
+        {/* Header */}
+        <View style={profileStyles.header}>
+          <TouchableOpacity onPress={onClose} style={profileStyles.closeBtn}>
+            <Text style={profileStyles.closeText}>Zatvori</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView contentContainerStyle={{ paddingBottom: 48 }}>
+          {/* Avatar + name */}
+          <View style={profileStyles.hero}>
+            {trainer.avatar_url ? (
+              <Image source={{ uri: trainer.avatar_url }} style={profileStyles.heroAvatar} />
+            ) : (
+              <View style={profileStyles.heroAvatarFallback}>
+                <Text style={profileStyles.heroInitials}>{initials}</Text>
+              </View>
+            )}
+            <Text style={profileStyles.heroName}>{trainer.full_name}</Text>
+            <Text style={profileStyles.heroRole}>Osobni trener</Text>
+          </View>
+
+          {/* Bio */}
+          {trainer.bio ? (
+            <View style={profileStyles.section}>
+              <Text style={profileStyles.sectionLabel}>O meni</Text>
+              <Text style={profileStyles.bioText}>{trainer.bio}</Text>
+            </View>
+          ) : null}
+
+          {/* Contact buttons */}
+          <View style={profileStyles.section}>
+            <Text style={profileStyles.sectionLabel}>Kontakt</Text>
+            <View style={profileStyles.contactGrid}>
+              {trainer.phone ? (
+                <TouchableOpacity style={profileStyles.contactBtn} onPress={openPhone}>
+                  <Text style={profileStyles.contactIcon}>📞</Text>
+                  <Text style={profileStyles.contactLabel}>Nazovi</Text>
+                  <Text style={profileStyles.contactValue}>{trainer.phone}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {trainer.email ? (
+                <TouchableOpacity style={profileStyles.contactBtn} onPress={openEmail}>
+                  <Text style={profileStyles.contactIcon}>✉️</Text>
+                  <Text style={profileStyles.contactLabel}>Email</Text>
+                  <Text style={profileStyles.contactValue} numberOfLines={1}>{trainer.email}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {trainer.instagram ? (
+                <TouchableOpacity style={[profileStyles.contactBtn, profileStyles.contactBtnIG]} onPress={openInstagram}>
+                  <Text style={profileStyles.contactIcon}>📸</Text>
+                  <Text style={profileStyles.contactLabel}>Instagram</Text>
+                  <Text style={profileStyles.contactValue} numberOfLines={1}>
+                    {trainer.instagram.startsWith('@') ? trainer.instagram : `@${trainer.instagram}`}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+              {trainer.website ? (
+                <TouchableOpacity style={profileStyles.contactBtn} onPress={() => openLink(trainer.website!)}>
+                  <Text style={profileStyles.contactIcon}>🌐</Text>
+                  <Text style={profileStyles.contactLabel}>Web</Text>
+                  <Text style={profileStyles.contactValue} numberOfLines={1}>{trainer.website}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+    </Modal>
+  )
+}
+
+const profileStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f3f4f6' },
+  header: { backgroundColor: '#1e1b4b', paddingTop: 16, paddingHorizontal: 20, paddingBottom: 16, alignItems: 'flex-end' },
+  closeBtn: { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99, paddingHorizontal: 14, paddingVertical: 7 },
+  closeText: { color: 'white', fontSize: 14, fontWeight: '600' },
+  hero: { backgroundColor: '#1e1b4b', alignItems: 'center', paddingBottom: 32, paddingTop: 8 },
+  heroAvatar: { width: 88, height: 88, borderRadius: 44, borderWidth: 3, borderColor: 'rgba(255,255,255,0.2)', marginBottom: 12 },
+  heroAvatarFallback: { width: 88, height: 88, borderRadius: 44, backgroundColor: '#8b5cf6', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
+  heroInitials: { color: 'white', fontSize: 28, fontWeight: '800' },
+  heroName: { fontSize: 22, fontWeight: '800', color: 'white', marginBottom: 4 },
+  heroRole: { fontSize: 13, color: '#a5b4fc' },
+  section: { margin: 16, marginBottom: 0 },
+  sectionLabel: { fontSize: 11, fontWeight: '700', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 10 },
+  bioText: { fontSize: 15, color: '#374151', lineHeight: 22, backgroundColor: 'white', borderRadius: 14, padding: 16 },
+  contactGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  contactBtn: {
+    backgroundColor: 'white', borderRadius: 14, padding: 14, flex: 1, minWidth: '45%',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 4, elevation: 1,
+  },
+  contactBtnIG: { backgroundColor: '#fdf2f8' },
+  contactIcon: { fontSize: 22, marginBottom: 6 },
+  contactLabel: { fontSize: 11, fontWeight: '600', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 },
+  contactValue: { fontSize: 13, fontWeight: '600', color: '#111827' },
+})
+
+// ── Main Chat Screen ──────────────────────────────────────────────────────────
 export default function ChatScreen() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -25,7 +160,8 @@ export default function ChatScreen() {
   const [clientId, setClientId] = useState<string | null>(null)
   const [trainerId, setTrainerId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
-  const [trainerName, setTrainerName] = useState('Trener')
+  const [trainerProfile, setTrainerProfile] = useState<TrainerProfile | null>(null)
+  const [showProfile, setShowProfile] = useState(false)
   const scrollRef = useRef<ScrollView>(null)
 
   useEffect(() => { initChat() }, [])
@@ -42,9 +178,12 @@ export default function ChatScreen() {
     setClientId(clientData.id)
     setTrainerId(clientData.trainer_id)
 
-    const { data: trainerProfile } = await supabase
-      .from('profiles').select('full_name').eq('id', clientData.trainer_id).single()
-    if (trainerProfile) setTrainerName(trainerProfile.full_name)
+    const { data: tp } = await supabase
+      .from('profiles')
+      .select('id, full_name, avatar_url, bio, phone, email, website, instagram')
+      .eq('id', clientData.trainer_id)
+      .single()
+    if (tp) setTrainerProfile(tp)
 
     await fetchMessages(clientData.id, clientData.trainer_id, user.id)
     subscribeToMessages(clientData.id, clientData.trainer_id, user.id)
@@ -52,19 +191,11 @@ export default function ChatScreen() {
 
   const fetchMessages = async (cId: string, tId: string, uid: string) => {
     const { data } = await supabase
-      .from('messages')
-      .select('*')
-      .eq('client_id', cId)
-      .eq('trainer_id', tId)
+      .from('messages').select('*').eq('client_id', cId).eq('trainer_id', tId)
       .order('created_at', { ascending: true })
-
     if (data) setMessages(data)
-
-    // Mark as read
     await supabase.from('messages').update({ read: true })
-      .eq('client_id', cId).eq('trainer_id', tId)
-      .neq('sender_id', uid).eq('read', false)
-
+      .eq('client_id', cId).eq('trainer_id', tId).neq('sender_id', uid).eq('read', false)
     setLoading(false)
   }
 
@@ -90,11 +221,7 @@ export default function ChatScreen() {
     const content = input.trim()
     setInput('')
     await supabase.from('messages').insert({
-      trainer_id: trainerId,
-      client_id: clientId,
-      sender_id: userId,
-      content,
-      read: false,
+      trainer_id: trainerId, client_id: clientId, sender_id: userId, content, read: false,
     })
     setSending(false)
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100)
@@ -128,7 +255,18 @@ export default function ChatScreen() {
     return acc
   }, {} as Record<string, Message[]>)
 
-  const getInitials = (name: string) => name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+  const trainerName = trainerProfile?.full_name || 'Trener'
+  const initials = trainerName.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
+
+  const TrainerAvatar = ({ size = 40, style = {} }: { size?: number; style?: any }) => (
+    trainerProfile?.avatar_url ? (
+      <Image source={{ uri: trainerProfile.avatar_url }} style={[{ width: size, height: size, borderRadius: size / 2 }, style]} />
+    ) : (
+      <View style={[styles.avatar, { width: size, height: size, borderRadius: size / 2 }, style]}>
+        <Text style={[styles.avatarText, { fontSize: size * 0.35 }]}>{initials}</Text>
+      </View>
+    )
+  )
 
   if (loading) return (
     <View style={styles.loadingContainer}>
@@ -142,16 +280,15 @@ export default function ChatScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={90}
     >
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{getInitials(trainerName)}</Text>
-        </View>
-        <View>
+      {/* Header — tap opens profile */}
+      <TouchableOpacity style={styles.header} onPress={() => setShowProfile(true)} activeOpacity={0.85}>
+        <TrainerAvatar size={40} />
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerName}>{trainerName}</Text>
-          <Text style={styles.headerSub}>Tvoj trener</Text>
+          <Text style={styles.headerSub}>Tvoj trener · Tap za profil</Text>
         </View>
-      </View>
+        <Text style={styles.headerChevron}>›</Text>
+      </TouchableOpacity>
 
       {/* Messages */}
       <ScrollView
@@ -163,9 +300,9 @@ export default function ChatScreen() {
       >
         {messages.length === 0 && (
           <View style={styles.emptyChat}>
-            <View style={styles.emptyChatAvatar}>
-              <Text style={styles.emptyChatAvatarText}>{getInitials(trainerName)}</Text>
-            </View>
+            <TouchableOpacity onPress={() => setShowProfile(true)} activeOpacity={0.85}>
+              <TrainerAvatar size={64} style={{ marginBottom: 12 }} />
+            </TouchableOpacity>
             <Text style={styles.emptyChatName}>{trainerName}</Text>
             <Text style={styles.emptyChatSub}>Početak razgovora</Text>
           </View>
@@ -173,7 +310,6 @@ export default function ChatScreen() {
 
         {Object.entries(groupedMessages).map(([dateKey, dayMessages]) => (
           <View key={dateKey}>
-            {/* Date separator */}
             <View style={styles.dateSeparator}>
               <View style={styles.dateLine} />
               <Text style={styles.dateText}>{formatDate(dayMessages[0].created_at)}</Text>
@@ -190,7 +326,6 @@ export default function ChatScreen() {
 
               return (
                 <View key={msg.id}>
-                  {/* Reaction picker */}
                   {isLongPressed && (
                     <View style={[styles.reactionPicker, isMe ? styles.reactionPickerRight : styles.reactionPickerLeft]}>
                       {EMOJIS.map(emoji => (
@@ -202,11 +337,14 @@ export default function ChatScreen() {
                   )}
 
                   <View style={[styles.messageRow, isMe ? styles.messageRowRight : styles.messageRowLeft, isLast ? styles.messageRowLastSpacing : styles.messageRowSpacing]}>
-                    {/* Trainer avatar */}
                     {!isMe && (
-                      <View style={[styles.msgAvatar, { opacity: isLast ? 1 : 0 }]}>
-                        <Text style={styles.msgAvatarText}>{getInitials(trainerName)}</Text>
-                      </View>
+                      <TouchableOpacity
+                        style={[{ opacity: isLast ? 1 : 0 }, styles.msgAvatarWrap]}
+                        onPress={() => setShowProfile(true)}
+                        disabled={!isLast}
+                      >
+                        <TrainerAvatar size={28} />
+                      </TouchableOpacity>
                     )}
 
                     <TouchableOpacity
@@ -225,14 +363,11 @@ export default function ChatScreen() {
                         <Text style={[styles.bubbleTime, isMe && styles.bubbleTimeMe]}>
                           {formatTime(msg.created_at)}
                         </Text>
-                        {isMe && (
-                          <Text style={styles.readReceipt}>{msg.read ? '✓✓' : '✓'}</Text>
-                        )}
+                        {isMe && <Text style={styles.readReceipt}>{msg.read ? '✓✓' : '✓'}</Text>}
                       </View>
                     </TouchableOpacity>
                   </View>
 
-                  {/* Reaction badge */}
                   {msg.reaction && (
                     <TouchableOpacity
                       onPress={() => addReaction(msg.id, msg.reaction!)}
@@ -257,11 +392,7 @@ export default function ChatScreen() {
         {showEmojis && (
           <View style={styles.emojiPicker}>
             {EMOJIS.map(emoji => (
-              <TouchableOpacity
-                key={emoji}
-                onPress={() => { setInput(p => p + emoji); setShowEmojis(false) }}
-                style={styles.emojiPickerBtn}
-              >
+              <TouchableOpacity key={emoji} onPress={() => { setInput(p => p + emoji); setShowEmojis(false) }} style={styles.emojiPickerBtn}>
                 <Text style={styles.emojiPickerText}>{emoji}</Text>
               </TouchableOpacity>
             ))}
@@ -285,6 +416,11 @@ export default function ChatScreen() {
           <Text style={styles.sendBtnText}>➤</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Trainer profile modal */}
+      {showProfile && trainerProfile && (
+        <TrainerProfileModal trainer={trainerProfile} onClose={() => setShowProfile(false)} />
+      )}
     </KeyboardAvoidingView>
   )
 }
@@ -292,39 +428,29 @@ export default function ChatScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f3f4f6' },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-
+  avatar: { backgroundColor: '#8b5cf6', alignItems: 'center', justifyContent: 'center' },
+  avatarText: { color: 'white', fontWeight: '700' },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#1e1b4b', paddingTop: 60, paddingBottom: 16,
-    paddingHorizontal: 20,
+    backgroundColor: '#1e1b4b', paddingTop: 60, paddingBottom: 16, paddingHorizontal: 20,
   },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#8b5cf6', alignItems: 'center', justifyContent: 'center' },
-  avatarText: { color: 'white', fontWeight: '700', fontSize: 14 },
   headerName: { fontSize: 16, fontWeight: '700', color: 'white' },
   headerSub: { fontSize: 12, color: '#a5b4fc' },
-
+  headerChevron: { fontSize: 24, color: 'rgba(255,255,255,0.4)', fontWeight: '300' },
   messageList: { flex: 1 },
   messageContent: { padding: 16, paddingBottom: 8 },
-
   emptyChat: { alignItems: 'center', marginTop: 60, marginBottom: 40 },
-  emptyChatAvatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#8b5cf6', alignItems: 'center', justifyContent: 'center', marginBottom: 12 },
-  emptyChatAvatarText: { color: 'white', fontWeight: '700', fontSize: 22 },
   emptyChatName: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
   emptyChatSub: { fontSize: 13, color: '#9ca3af' },
-
   dateSeparator: { flexDirection: 'row', alignItems: 'center', marginVertical: 16, gap: 8 },
   dateLine: { flex: 1, height: 1, backgroundColor: '#e5e7eb' },
   dateText: { fontSize: 12, color: '#9ca3af', backgroundColor: '#f3f4f6', paddingHorizontal: 8 },
-
   messageRow: { flexDirection: 'row', alignItems: 'flex-end' },
   messageRowLeft: { justifyContent: 'flex-start' },
   messageRowRight: { justifyContent: 'flex-end' },
   messageRowSpacing: { marginBottom: 2 },
   messageRowLastSpacing: { marginBottom: 8 },
-
-  msgAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#8b5cf6', alignItems: 'center', justifyContent: 'center', marginRight: 8, flexShrink: 0 },
-  msgAvatarText: { color: 'white', fontSize: 10, fontWeight: '700' },
-
+  msgAvatarWrap: { width: 28, height: 28, marginRight: 8, flexShrink: 0 },
   bubble: { maxWidth: '72%', paddingHorizontal: 14, paddingVertical: 8 },
   bubbleMe: { backgroundColor: '#6366f1' },
   bubbleThem: { backgroundColor: 'white', borderWidth: 1, borderColor: '#f3f4f6' },
@@ -336,63 +462,49 @@ const styles = StyleSheet.create({
   bubbleThemFirst: { borderRadius: 20, borderBottomLeftRadius: 4 },
   bubbleThemMid: { borderRadius: 20, borderTopLeftRadius: 4, borderBottomLeftRadius: 4 },
   bubbleThemLast: { borderRadius: 20, borderTopLeftRadius: 4, borderBottomLeftRadius: 6 },
-
   bubbleText: { fontSize: 15, color: '#111827', lineHeight: 21 },
   bubbleTextMe: { color: 'white' },
   bubbleMeta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 3 },
   bubbleTime: { fontSize: 10, color: '#9ca3af' },
   bubbleTimeMe: { color: 'rgba(255,255,255,0.6)' },
   readReceipt: { fontSize: 10, color: 'rgba(255,255,255,0.6)' },
-
   reactionPicker: {
-    flexDirection: 'row', backgroundColor: 'white', borderRadius: 99,
-    padding: 8, gap: 4, marginBottom: 4,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12, shadowRadius: 8, elevation: 4,
+    flexDirection: 'row', backgroundColor: 'white', borderRadius: 99, padding: 8, gap: 4, marginBottom: 4,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 4,
     position: 'relative', zIndex: 10,
   },
   reactionPickerLeft: { alignSelf: 'flex-start', marginLeft: 36 },
   reactionPickerRight: { alignSelf: 'flex-end' },
   reactionBtn: { padding: 4 },
   reactionEmoji: { fontSize: 20 },
-
   reactionBadge: {
     backgroundColor: 'white', borderRadius: 99, paddingHorizontal: 8, paddingVertical: 3,
     borderWidth: 1, borderColor: '#e5e7eb', marginTop: -4, marginBottom: 4,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06, shadowRadius: 3, elevation: 1,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 3, elevation: 1,
   },
   reactionBadgeLeft: { alignSelf: 'flex-start', marginLeft: 36 },
   reactionBadgeRight: { alignSelf: 'flex-end' },
   reactionBadgeText: { fontSize: 14 },
-
   inputArea: {
     flexDirection: 'row', alignItems: 'flex-end', gap: 8,
-    padding: 12, backgroundColor: 'white',
-    borderTopWidth: 1, borderTopColor: '#f3f4f6',
+    padding: 12, backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#f3f4f6',
   },
   emojiBtn: { padding: 8, marginBottom: 2 },
   emojiBtnText: { fontSize: 22 },
   emojiPicker: {
-    position: 'absolute', bottom: 70, left: 12,
-    flexDirection: 'row', backgroundColor: 'white', borderRadius: 99,
-    padding: 8, gap: 4, zIndex: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12, shadowRadius: 8, elevation: 4,
+    position: 'absolute', bottom: 70, left: 12, flexDirection: 'row', backgroundColor: 'white',
+    borderRadius: 99, padding: 8, gap: 4, zIndex: 10,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 4,
     borderWidth: 1, borderColor: '#f3f4f6',
   },
   emojiPickerBtn: { padding: 4 },
   emojiPickerText: { fontSize: 22 },
   input: {
     flex: 1, backgroundColor: '#f9fafb', borderRadius: 24,
-    paddingHorizontal: 16, paddingVertical: 10,
-    fontSize: 15, color: '#111827', maxHeight: 100,
-    borderWidth: 1, borderColor: '#f3f4f6',
+    paddingHorizontal: 16, paddingVertical: 10, fontSize: 15, color: '#111827',
+    maxHeight: 100, borderWidth: 1, borderColor: '#f3f4f6',
   },
-  sendBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#6366f1', alignItems: 'center', justifyContent: 'center',
-  },
+  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#6366f1', alignItems: 'center', justifyContent: 'center' },
   sendBtnDisabled: { backgroundColor: '#e5e7eb' },
   sendBtnText: { color: 'white', fontSize: 16 },
 })

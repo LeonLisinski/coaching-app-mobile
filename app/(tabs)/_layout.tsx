@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router'
-import { CheckSquare, Dumbbell, Home, MessageSquare, UtensilsCrossed } from 'lucide-react-native'
+import { ClipboardCheck, Dumbbell, Home, MessageCircle, Salad } from 'lucide-react-native'
+import { Platform, View } from 'react-native'
 
 export default function TabsLayout() {
   return (
@@ -8,51 +9,69 @@ export default function TabsLayout() {
         headerShown: false,
         tabBarActiveTintColor: '#3b82f6',
         tabBarInactiveTintColor: '#9ca3af',
+        tabBarShowLabel: false,
         tabBarStyle: {
           backgroundColor: 'white',
           borderTopColor: '#f3f4f6',
-          paddingBottom: 5,
-          height: 60,
+          borderTopWidth: 1,
+          height: Platform.OS === 'ios' ? 88 : 64,
+          paddingBottom: Platform.OS === 'ios' ? 28 : 10,
+          paddingTop: 10,
         },
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '500',
-        }
       }}
     >
       <Tabs.Screen
         name="1-training"
         options={{
-          title: 'Trening',
-          tabBarIcon: ({ color }) => <Dumbbell size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{ alignItems: 'center', gap: 3 }}>
+              <Dumbbell size={22} color={color} strokeWidth={focused ? 2.5 : 1.8} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="2-nutrition"
         options={{
-          title: 'Prehrana',
-          tabBarIcon: ({ color }) => <UtensilsCrossed size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{ alignItems: 'center', gap: 3 }}>
+              <Salad size={22} color={color} strokeWidth={focused ? 2.5 : 1.8} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Početna',
-          tabBarIcon: ({ color }) => <Home size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{
+              backgroundColor: focused ? '#3b82f6' : '#f3f4f6',
+              borderRadius: 16,
+              padding: 10,
+            }}>
+              <Home size={22} color={focused ? 'white' : '#9ca3af'} strokeWidth={focused ? 2.5 : 1.8} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="4-chat"
         options={{
-          title: 'Chat',
-          tabBarIcon: ({ color }) => <MessageSquare size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{ alignItems: 'center' }}>
+              <MessageCircle size={22} color={color} strokeWidth={focused ? 2.5 : 1.8} />
+            </View>
+          ),
         }}
       />
       <Tabs.Screen
         name="5-checkin"
         options={{
-          title: 'Check-in',
-          tabBarIcon: ({ color }) => <CheckSquare size={22} color={color} />,
+          tabBarIcon: ({ color, focused }) => (
+            <View style={{ alignItems: 'center' }}>
+              <ClipboardCheck size={22} color={color} strokeWidth={focused ? 2.5 : 1.8} />
+            </View>
+          ),
         }}
       />
     </Tabs>
