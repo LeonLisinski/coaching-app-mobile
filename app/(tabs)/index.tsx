@@ -5,6 +5,7 @@ import {
   ActivityIndicator, Dimensions, Modal, ScrollView,
   StyleSheet, Text, TouchableOpacity, View
 } from 'react-native'
+import Svg, { Circle, Defs, Line, LinearGradient, Path, Stop } from 'react-native-svg'
 
 type Profile = { full_name: string; email: string }
 type CheckinConfig = { checkin_day: number | null }
@@ -14,7 +15,7 @@ type ChartPoint = { label: string; value: number; date: string }
 
 const DAYS_SHORT = ['Ned', 'Pon', 'Uto', 'Sri', 'Čet', 'Pet', 'Sub']
 const { width } = Dimensions.get('window')
-const CHART_W = width - 64
+const CHART_W = width - 40 - 36 - 16 // screen - padding - yAxis - some margin
 const CHART_H = 120
 
 const getToday = () => {
@@ -41,8 +42,7 @@ export default function HomeScreen() {
   const [clientId, setClientId] = useState<string | null>(null)
   const [trainerId, setTrainerId] = useState<string | null>(null)
 
-  // "Treniraš danas?" state
-  const [isTrainingDay, setIsTrainingDay] = useState<boolean | null>(null) // null = not yet answered
+  const [isTrainingDay, setIsTrainingDay] = useState<boolean | null>(null)
   const [dailyLogId, setDailyLogId] = useState<string | null>(null)
   const [savingTrainingDay, setSavingTrainingDay] = useState(false)
 
@@ -88,13 +88,11 @@ export default function HomeScreen() {
     setHasTraining((trainingData?.length ?? 0) > 0)
     setHasNutrition((nutritionData?.length ?? 0) > 0)
 
-    // Check if client has training_day/rest_day plans (show question only then)
     const hasTypedPlans = mealPlansData?.some(
       p => p.plan_type === 'training_day' || p.plan_type === 'rest_day'
     ) ?? false
     setHasTrainingDayPlan(hasTypedPlans)
 
-    // Load today's training day answer
     if (dailyLogData) {
       setDailyLogId(dailyLogData.id)
       setIsTrainingDay(dailyLogData.is_training_day ?? null)
@@ -102,7 +100,6 @@ export default function HomeScreen() {
 
     setUnreadMessages(messagesData?.length ?? 0)
 
-    // Next training
     const { data: wpData } = await supabase
       .from('client_workout_plans').select('workout_plan_id')
       .eq('client_id', cId).eq('active', true).limit(1).single()
@@ -124,11 +121,9 @@ export default function HomeScreen() {
       }
     }
 
-    // Next meal — use training day preference to pick right plan
     const trainingAnswered = dailyLogData?.is_training_day ?? null
     await loadNextMeal(cId, hasTypedPlans, trainingAnswered)
 
-    // Chart params
     if (paramsData && paramsData.length > 0) {
       setCheckinParams(paramsData)
       setSelectedParam(paramsData[0])
@@ -185,7 +180,6 @@ export default function HomeScreen() {
       if (data) setDailyLogId(data.id)
     }
 
-    // Reload next meal based on new answer
     await loadNextMeal(clientId, hasTrainingDayPlan, answer)
     setSavingTrainingDay(false)
   }
@@ -230,10 +224,37 @@ export default function HomeScreen() {
   const todayDay = new Date().getDay()
   const isCheckinDay = checkinConfig?.checkin_day === todayDay
 
+  // SVG chart helpers
   const chartMin = chartData.length > 0 ? Math.min(...chartData.map(d => d.value)) : 0
   const chartMax = chartData.length > 0 ? Math.max(...chartData.map(d => d.value)) : 1
   const chartRange = chartMax - chartMin || 1
-  const getY = (v: number) => CHART_H - ((v - chartMin) / chartRange) * (CHART_H - 16) - 8
+  const PAD = { top: 12, bottom: 8, left: 0, right: 8 }
+  const innerH = CHART_H - PAD.top - PAD.bottom
+  const innerW = CHART_W - PAD.left - PAD.right
+
+  const getX = (i: number) => {
+    if (chartData.length === 1) return innerW / 2
+    return PAD.left + (i / (chartData.length - 1)) * innerW
+  }
+  const getY = (v: number) => PAD.top + innerH - ((v - chartMin) / chartRange) * innerH
+
+  // Build SVG path for area fill
+  const buildAreaPath = () => {
+    if (chartData.length < 2) return ''
+    const points = chartData.map((d, i) => `${getX(i)},${getY(d.value)}`)
+    return [
+      `M ${getX(0)},${CHART_H - PAD.bottom}`,
+      `L ${points[0]}`,
+      ...chartData.slice(1).map((d, i) => `L ${getX(i + 1)},${getY(d.value)}`),
+      `L ${getX(chartData.length - 1)},${CHART_H - PAD.bottom}`,
+      'Z'
+    ].join(' ')
+  }
+
+  const buildLinePath = () => {
+    if (chartData.length < 2) return ''
+    return chartData.map((d, i) => `${i === 0 ? 'M' : 'L'} ${getX(i)},${getY(d.value)}`).join(' ')
+  }
 
   if (loading) return (
     <View style={styles.loadingContainer}>
@@ -300,7 +321,7 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* "Treniraš danas?" card — only show if client has typed plans */}
+      {/* Treniraš danas? */}
       {(hasTrainingDayPlan || hasTraining) && (
         <View style={styles.trainingDayCard}>
           <View style={styles.trainingDayLeft}>
@@ -309,14 +330,11 @@ export default function HomeScreen() {
             </Text>
             <View>
               <Text style={styles.trainingDayTitle}>Treniraš danas?</Text>
-              {isTrainingDay !== null && (
+              {isTrainingDay !== null ? (
                 <Text style={styles.trainingDayAnswer}>
-                  {isTrainingDay
-                    ? 'Da — plan prehrane za trening'
-                    : 'Ne — plan prehrane za odmor'}
+                  {isTrainingDay ? 'Da — plan prehrane za trening' : 'Ne — plan prehrane za odmor'}
                 </Text>
-              )}
-              {isTrainingDay === null && (
+              ) : (
                 <Text style={styles.trainingDayHint}>Odgovori da vidimo pravi plan prehrane</Text>
               )}
             </View>
@@ -383,47 +401,70 @@ export default function HomeScreen() {
               <Text style={styles.chartEmptyText}>Nema podataka za ovaj parametar</Text>
             </View>
           ) : (
-            <View style={styles.chartWrap}>
-              <View style={styles.yAxis}>
-                <Text style={styles.yLabel}>{chartMax % 1 === 0 ? chartMax : chartMax.toFixed(1)}</Text>
-                <Text style={styles.yLabel}>{((chartMax + chartMin) / 2) % 1 === 0 ? (chartMax + chartMin) / 2 : ((chartMax + chartMin) / 2).toFixed(1)}</Text>
-                <Text style={styles.yLabel}>{chartMin % 1 === 0 ? chartMin : chartMin.toFixed(1)}</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={[styles.chartArea, { height: CHART_H }]}>
-                  {[0, 0.5, 1].map(f => (
-                    <View key={f} style={[styles.gridLine, { top: f * (CHART_H - 16) + 4 }]} />
+            <View>
+              {/* Y axis labels + SVG chart */}
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                {/* Y axis */}
+                <View style={{ width: 36, height: CHART_H, justifyContent: 'space-between', paddingVertical: PAD.top, alignItems: 'flex-end', paddingRight: 6 }}>
+                  <Text style={styles.yLabel}>{chartMax % 1 === 0 ? chartMax : chartMax.toFixed(1)}</Text>
+                  <Text style={styles.yLabel}>{(((chartMax + chartMin) / 2) % 1 === 0 ? (chartMax + chartMin) / 2 : ((chartMax + chartMin) / 2).toFixed(1))}</Text>
+                  <Text style={styles.yLabel}>{chartMin % 1 === 0 ? chartMin : chartMin.toFixed(1)}</Text>
+                </View>
+
+                {/* SVG */}
+                <Svg width={CHART_W} height={CHART_H}>
+                  <Defs>
+                    <LinearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                      <Stop offset="0%" stopColor="#3b82f6" stopOpacity="0.18" />
+                      <Stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+                    </LinearGradient>
+                  </Defs>
+
+                  {/* Grid lines */}
+                  {[0, 0.5, 1].map((f, i) => (
+                    <Line
+                      key={i}
+                      x1={0} y1={PAD.top + f * innerH}
+                      x2={CHART_W} y2={PAD.top + f * innerH}
+                      stroke="#f3f4f6" strokeWidth="1"
+                    />
                   ))}
-                  {chartData.length > 1 && chartData.map((point, i) => {
-                    if (i === chartData.length - 1) return null
-                    const cw = CHART_W - 48
-                    const x1 = (i / (chartData.length - 1)) * cw
-                    const y1 = getY(point.value)
-                    const x2 = ((i + 1) / (chartData.length - 1)) * cw
-                    const y2 = getY(chartData[i + 1].value)
-                    const dx = x2 - x1; const dy = y2 - y1
-                    const len = Math.sqrt(dx * dx + dy * dy)
-                    const angle = Math.atan2(dy, dx) * 180 / Math.PI
-                    return (
-                      <View key={`line-${i}`} style={{
-                        position: 'absolute', left: x1, top: y1,
-                        width: len, height: 2.5, backgroundColor: '#3b82f6',
-                        transform: [{ rotate: `${angle}deg` }],
-                      }} />
-                    )
-                  })}
-                  {chartData.map((point, i) => {
-                    const x = chartData.length === 1 ? (CHART_W - 48) / 2 : (i / (chartData.length - 1)) * (CHART_W - 48)
-                    const y = getY(point.value)
-                    return <View key={`dot-${i}`} style={[styles.dot, { left: x - 5, top: y - 5 }]} />
-                  })}
-                </View>
-                <View style={styles.xAxis}>
-                  {chartData.map((p, i) => {
-                    const show = chartData.length <= 6 || i === 0 || i === chartData.length - 1 || i % Math.ceil(chartData.length / 4) === 0
-                    return <Text key={i} style={[styles.xLabel, { opacity: show ? 1 : 0 }]}>{p.label}</Text>
-                  })}
-                </View>
+
+                  {/* Area fill */}
+                  {chartData.length > 1 && (
+                    <Path d={buildAreaPath()} fill="url(#areaGrad)" />
+                  )}
+
+                  {/* Line */}
+                  {chartData.length > 1 && (
+                    <Path
+                      d={buildLinePath()}
+                      fill="none" stroke="#3b82f6" strokeWidth="2.5"
+                      strokeLinejoin="round" strokeLinecap="round"
+                    />
+                  )}
+
+                  {/* Dots */}
+                  {chartData.map((d, i) => (
+                    <Circle
+                      key={i}
+                      cx={getX(i)} cy={getY(d.value)}
+                      r="5" fill="#3b82f6" stroke="white" strokeWidth="2"
+                    />
+                  ))}
+                </Svg>
+              </View>
+
+              {/* X axis labels */}
+              <View style={{ flexDirection: 'row', paddingLeft: 36, paddingTop: 4 }}>
+                {chartData.map((p, i) => {
+                  const show = chartData.length <= 6 || i === 0 || i === chartData.length - 1 || i % Math.ceil(chartData.length / 4) === 0
+                  return (
+                    <Text key={i} style={[styles.xLabel, { flex: 1, opacity: show ? 1 : 0 }]}>
+                      {p.label}
+                    </Text>
+                  )
+                })}
               </View>
             </View>
           )}
@@ -486,7 +527,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f3f4f6' },
 
   headerBg: {
-    backgroundColor: '#1e1b4b', paddingTop: 60, paddingHorizontal: 20,
+    backgroundColor: '#1e1b4b', paddingTop: 56, paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,
   },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
@@ -494,6 +535,7 @@ const styles = StyleSheet.create({
   name: { fontSize: 28, fontWeight: '800', color: 'white', marginTop: 2 },
   logoutBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 8 },
   logoutText: { fontSize: 13, color: '#a5b4fc' },
+
   checkinAlert: {
     backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, padding: 14,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -519,7 +561,6 @@ const styles = StyleSheet.create({
   statValue: { fontSize: 12, fontWeight: '700', color: '#111827', textAlign: 'center', paddingHorizontal: 4 },
   statValueOff: { color: '#d1d5db' },
 
-  // Training day card
   trainingDayCard: {
     backgroundColor: 'white', borderRadius: 16, marginHorizontal: 20, marginBottom: 16,
     padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -562,24 +603,19 @@ const styles = StyleSheet.create({
   chartTitle: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 12 },
   chartEmpty: { height: 100, alignItems: 'center', justifyContent: 'center' },
   chartEmptyText: { fontSize: 13, color: '#9ca3af', textAlign: 'center' },
-  chartWrap: { flexDirection: 'row', alignItems: 'flex-start' },
-  yAxis: { width: 36, height: CHART_H, justifyContent: 'space-between', paddingVertical: 4, alignItems: 'flex-end', paddingRight: 6 },
   yLabel: { fontSize: 10, color: '#9ca3af' },
-  chartArea: { flex: 1, position: 'relative' },
-  gridLine: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: '#f3f4f6' },
-  dot: { position: 'absolute', width: 10, height: 10, borderRadius: 5, backgroundColor: '#3b82f6', borderWidth: 2, borderColor: 'white' },
-  xAxis: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 6 },
   xLabel: { fontSize: 10, color: '#9ca3af', textAlign: 'center' },
   chartStats: { flexDirection: 'row', marginTop: 16, paddingTop: 14, borderTopWidth: 1, borderTopColor: '#f3f4f6' },
   chartStatItem: { flex: 1, alignItems: 'center' },
   chartStatLabel: { fontSize: 11, color: '#9ca3af', marginBottom: 4 },
   chartStatValue: { fontSize: 14, fontWeight: '700', color: '#111827' },
+
   paramSelector: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: '#f9fafb', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 10,
     borderWidth: 1, borderColor: '#e5e7eb', marginBottom: 16, alignSelf: 'flex-start',
   },
-  paramSelectorText: { fontSize: 14, fontWeight: '600', color: '#111827', flex: 1 },
+  paramSelectorText: { fontSize: 14, fontWeight: '600', color: '#111827' },
   paramSelectorUnit: { fontSize: 12, color: '#9ca3af' },
   paramSelectorChevron: { fontSize: 12, color: '#9ca3af' },
 })

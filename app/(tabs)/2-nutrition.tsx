@@ -39,7 +39,6 @@ const MEAL_TYPE_LABELS: Record<string, string> = {
   'Doručak': 'Doručak', 'Ručak': 'Ručak', 'Večera': 'Večera', 'Užina': 'Užina',
 }
 
-// Day resets at 4am not midnight — handles late-night meals
 const getToday = () => {
   const now = new Date(Date.now() - 4 * 60 * 60 * 1000)
   return now.toISOString().split('T')[0]
@@ -47,9 +46,9 @@ const getToday = () => {
 
 export default function NutritionScreen() {
   const [plan, setPlan] = useState<MealPlan | null>(null)
-  const [altPlan, setAltPlan] = useState<MealPlan | null>(null) // the other plan type if exists
+  const [altPlan, setAltPlan] = useState<MealPlan | null>(null)
   const [planMode, setPlanMode] = useState<'training_day' | 'rest_day' | 'default' | null>(null)
-  const [isTrainingDay, setIsTrainingDay] = useState(false)
+  const [isTrainingDay, setIsTrainingDay] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
   const [log, setLog] = useState<NutritionLog | null>(null)
   const [completedMeals, setCompletedMeals] = useState<string[]>([])
@@ -74,15 +73,15 @@ export default function NutritionScreen() {
     setClientId(clientData.id)
     setTrainerId(clientData.trainer_id)
 
-    // Check if today is a training day (has workout log today)
-    const { data: todayLog } = await supabase
-      .from('workout_logs')
-      .select('id')
+    // Read is_training_day from daily_logs (set by home screen answer)
+    const { data: dailyLog } = await supabase
+      .from('daily_logs')
+      .select('is_training_day')
       .eq('client_id', clientData.id)
       .eq('date', today)
-      .limit(1)
+      .single()
 
-    const todayIsTraining = (todayLog?.length ?? 0) > 0
+    const todayIsTraining: boolean | null = dailyLog?.is_training_day ?? null
     setIsTrainingDay(todayIsTraining)
 
     // Fetch all active meal plans
@@ -95,8 +94,6 @@ export default function NutritionScreen() {
 
     if (!allAssigned || allAssigned.length === 0) return setLoading(false)
 
-    // Determine which plan to show
-    // Priority: training_day/rest_day > default
     const trainingPlan = allAssigned.find(p => p.plan_type === 'training_day')
     const restPlan = allAssigned.find(p => p.plan_type === 'rest_day')
     const defaultPlan = allAssigned.find(p => p.plan_type === 'default' || !p.plan_type)
@@ -105,9 +102,18 @@ export default function NutritionScreen() {
     let mode: 'training_day' | 'rest_day' | 'default' = 'default'
 
     if (trainingPlan && restPlan) {
-      // Both exist — pick based on today
-      primaryAssigned = todayIsTraining ? trainingPlan : restPlan
-      mode = todayIsTraining ? 'training_day' : 'rest_day'
+      // Both typed plans exist — use daily_log answer, fallback to default
+      if (todayIsTraining === true) {
+        primaryAssigned = trainingPlan
+        mode = 'training_day'
+      } else if (todayIsTraining === false) {
+        primaryAssigned = restPlan
+        mode = 'rest_day'
+      } else {
+        // Not answered yet — show default or training_day as fallback
+        primaryAssigned = defaultPlan || trainingPlan
+        mode = defaultPlan ? 'default' : 'training_day'
+      }
     } else if (trainingPlan) {
       primaryAssigned = trainingPlan
       mode = 'training_day'
@@ -119,18 +125,17 @@ export default function NutritionScreen() {
     setPlanMode(mode)
     if (!primaryAssigned) return setLoading(false)
 
-    // Load primary plan
     const loadedPlan = await loadPlanData(primaryAssigned, clientData.id, clientData.trainer_id)
     if (loadedPlan) setPlan(loadedPlan)
 
-    // Load alt plan for manual switch (if both training/rest exist)
+    // Alt plan for manual switch
     if (trainingPlan && restPlan) {
-      const altAssigned = todayIsTraining ? restPlan : trainingPlan
+      const altAssigned = mode === 'training_day' ? restPlan : trainingPlan
       const loadedAlt = await loadPlanData(altAssigned, clientData.id, clientData.trainer_id)
       if (loadedAlt) setAltPlan(loadedAlt)
     }
 
-    // Load today's nutrition log
+    // Today's nutrition log
     const { data: logData } = await supabase
       .from('nutrition_logs').select('*')
       .eq('client_id', clientData.id).eq('date', today).single()
@@ -238,7 +243,8 @@ export default function NutritionScreen() {
     </View>
   )
 
-  if (!plan) return (
+  // Not answered yet and both plans exist — show prompt
+  if (!plan || (isTrainingDay === null && !plan)) return (
     <View style={styles.emptyContainer}>
       <Text style={styles.emptyEmoji}>🥗</Text>
       <Text style={styles.emptyTitle}>Nema aktivnog plana</Text>
@@ -248,12 +254,15 @@ export default function NutritionScreen() {
 
   const isConfirmed = log?.confirmed || false
   const completedCount = completedMeals.length
-  const totalMeals = plan.meals.length
+  const totalMeals = plan!.meals.length
+
+  // Banner when both plans exist but not answered yet
+  const showUnansweredBanner = isTrainingDay === null && altPlan !== null
 
   const planBadge = planMode === 'training_day'
-    ? { label: '💪 Dan treninga', bg: '#dbeafe', text: '#1d4ed8' }
+    ? { label: '💪 Dan treninga', sub: 'Više kalorija i proteina' }
     : planMode === 'rest_day'
-    ? { label: '😌 Dan odmora', bg: '#ede9fe', text: '#6d28d9' }
+    ? { label: '😌 Dan odmora', sub: 'Manji unos kalorija' }
     : null
 
   return (
@@ -265,7 +274,6 @@ export default function NutritionScreen() {
         <View style={styles.headerBg}>
           <View style={styles.headerTop}>
             <Text style={styles.headerLabel}>Plan prehrane</Text>
-            {/* Manual switch button if both plans exist */}
             {altPlan && (
               <TouchableOpacity onPress={switchPlan} style={styles.switchBtn}>
                 <Text style={styles.switchBtnText}>
@@ -274,51 +282,44 @@ export default function NutritionScreen() {
               </TouchableOpacity>
             )}
           </View>
-          <Text style={styles.headerTitle}>{plan.name}</Text>
+          <Text style={styles.headerTitle}>{plan!.name}</Text>
 
-          {/* Plan type badge */}
           {planBadge && (
-            <View style={[styles.planBadge, { backgroundColor: 'rgba(255,255,255,0.15)' }]}>
+            <View style={styles.planBadge}>
               <Text style={styles.planBadgeText}>{planBadge.label}</Text>
-              {altPlan && (
-                <Text style={styles.planBadgeSub}>
-                  · tap gumb gore za prikaz {planMode === 'training_day' ? 'plana odmora' : 'plana treninga'}
-                </Text>
-              )}
+              <Text style={styles.planBadgeSub}> · {planBadge.sub}</Text>
             </View>
           )}
 
-          {/* Makro targeti */}
-          {(plan.calories_target || plan.protein_target) && (
+          {(plan!.calories_target || plan!.protein_target) && (
             <View style={styles.macroRow}>
-              {plan.calories_target && (
+              {plan!.calories_target && (
                 <View style={styles.macroItem}>
-                  <Text style={styles.macroValue}>{plan.calories_target}</Text>
+                  <Text style={styles.macroValue}>{plan!.calories_target}</Text>
                   <Text style={styles.macroLabel}>kcal</Text>
                 </View>
               )}
-              {plan.protein_target && (
+              {plan!.protein_target && (
                 <View style={styles.macroItem}>
-                  <Text style={styles.macroValue}>{plan.protein_target}g</Text>
+                  <Text style={styles.macroValue}>{plan!.protein_target}g</Text>
                   <Text style={styles.macroLabel}>Proteini</Text>
                 </View>
               )}
-              {plan.carbs_target && (
+              {plan!.carbs_target && (
                 <View style={styles.macroItem}>
-                  <Text style={styles.macroValue}>{plan.carbs_target}g</Text>
+                  <Text style={styles.macroValue}>{plan!.carbs_target}g</Text>
                   <Text style={styles.macroLabel}>Ugljikohidrati</Text>
                 </View>
               )}
-              {plan.fat_target && (
+              {plan!.fat_target && (
                 <View style={styles.macroItem}>
-                  <Text style={styles.macroValue}>{plan.fat_target}g</Text>
+                  <Text style={styles.macroValue}>{plan!.fat_target}g</Text>
                   <Text style={styles.macroLabel}>Masti</Text>
                 </View>
               )}
             </View>
           )}
 
-          {/* Dnevni progress */}
           <View>
             <View style={styles.dayProgressHeader}>
               <Text style={styles.dayProgressLabel}>Danas</Text>
@@ -333,6 +334,17 @@ export default function NutritionScreen() {
           </View>
         </View>
 
+        {/* Unanswered banner — nudge to go answer on home */}
+        {showUnansweredBanner && (
+          <View style={styles.unansweredBanner}>
+            <Text style={styles.unansweredEmoji}>❓</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.unansweredTitle}>Treniraš danas?</Text>
+              <Text style={styles.unansweredSub}>Odgovori na početnom ekranu da vidimo pravi plan</Text>
+            </View>
+          </View>
+        )}
+
         {isConfirmed && (
           <View style={styles.confirmedBanner}>
             <Text style={styles.confirmedEmoji}>✅</Text>
@@ -343,16 +355,15 @@ export default function NutritionScreen() {
           </View>
         )}
 
-        {plan.notes && (
+        {plan!.notes && (
           <View style={styles.notesCard}>
             <Text style={styles.notesLabel}>📝 Napomena trenera</Text>
-            <Text style={styles.notesText}>{plan.notes}</Text>
+            <Text style={styles.notesText}>{plan!.notes}</Text>
           </View>
         )}
 
-        {/* Obroci */}
         <Text style={styles.sectionTitle}>Obroci</Text>
-        {plan.meals.map((meal) => {
+        {plan!.meals.map((meal) => {
           const isCompleted = completedMeals.includes(meal.id)
           const isExpanded = expandedMeal === meal.id
 
@@ -426,7 +437,6 @@ export default function NutritionScreen() {
           )
         })}
 
-        {/* Unos makroa */}
         <Text style={styles.sectionTitle}>Unos makroa za danas</Text>
         <View style={styles.macroInputCard}>
           <Text style={styles.macroInputDesc}>Unesi stvarno konzumirane makroe na kraju dana</Text>
@@ -493,15 +503,12 @@ const styles = StyleSheet.create({
   headerLabel: { fontSize: 12, color: '#6ee7b7', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
   headerTitle: { fontSize: 26, fontWeight: '800', color: 'white', marginBottom: 10 },
 
-  switchBtn: {
-    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99,
-    paddingHorizontal: 12, paddingVertical: 5,
-  },
+  switchBtn: { backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99, paddingHorizontal: 12, paddingVertical: 5 },
   switchBtnText: { fontSize: 12, color: 'white', fontWeight: '600' },
 
-  planBadge: { borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  planBadgeText: { fontSize: 13, color: 'rgba(255,255,255,0.9)', fontWeight: '600' },
-  planBadgeSub: { fontSize: 11, color: 'rgba(255,255,255,0.6)' },
+  planBadge: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6, marginBottom: 12, alignSelf: 'flex-start' },
+  planBadgeText: { fontSize: 13, color: 'rgba(255,255,255,0.95)', fontWeight: '700' },
+  planBadgeSub: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
 
   macroRow: { flexDirection: 'row', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 14, padding: 12, gap: 8, marginBottom: 16 },
   macroItem: { flex: 1, alignItems: 'center' },
@@ -513,6 +520,15 @@ const styles = StyleSheet.create({
   dayProgressCount: { fontSize: 12, fontWeight: '700', color: 'white' },
   dayProgressBar: { height: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 99, overflow: 'hidden' },
   dayProgressFill: { height: '100%', borderRadius: 99 },
+
+  unansweredBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#fefce8', borderRadius: 14, marginHorizontal: 20, marginBottom: 12,
+    padding: 14, borderWidth: 1, borderColor: '#fde68a',
+  },
+  unansweredEmoji: { fontSize: 24 },
+  unansweredTitle: { fontSize: 14, fontWeight: '700', color: '#92400e' },
+  unansweredSub: { fontSize: 12, color: '#b45309', marginTop: 2 },
 
   confirmedBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#f0fdf4', borderRadius: 14, marginHorizontal: 20, marginBottom: 12, padding: 14, borderWidth: 1, borderColor: '#86efac' },
   confirmedEmoji: { fontSize: 28 },

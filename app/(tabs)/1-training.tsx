@@ -780,7 +780,7 @@ export default function TrainingScreen() {
                 <Text style={[styles.dayName, isDone && styles.dayNameDone]}>{day.name}</Text>
                 <Text style={styles.dayMeta}>
                   {day.exercises.length} vježbi
-                  {isDone ? ' · ✓ Odraðeno ovaj tjedan' : isNext ? ' · Sljedeći na redu' : ''}
+                  {isDone ? ' · ✓ Odrađeno ovaj tjedan' : isNext ? ' · Sljedeći na redu' : ''}
                 </Text>
               </View>
             </View>
