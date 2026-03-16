@@ -1,6 +1,9 @@
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { useLanguage } from '@/lib/LanguageContext'
+import { UnitLiftLogo } from '@/lib/UnitLiftLogo'
+import { useFocusEffect, useRouter } from 'expo-router'
+import { BarChart2, ClipboardCheck, Dumbbell, Salad } from 'lucide-react-native'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator, Dimensions, Modal, ScrollView,
   StyleSheet, Text, TouchableOpacity, View
@@ -13,7 +16,7 @@ type TodayCheckin = { id: string } | null
 type CheckinParam = { id: string; name: string; unit: string | null }
 type ChartPoint = { label: string; value: number; date: string }
 
-const DAYS_SHORT = ['Ned', 'Pon', 'Uto', 'Sri', 'Čet', 'Pet', 'Sub']
+// DAYS_SHORT is now derived from i18n inside the component
 const { width } = Dimensions.get('window')
 const CHART_W = width - 40 - 36 - 16 // screen - padding - yAxis - some margin
 const CHART_H = 120
@@ -25,6 +28,8 @@ const getToday = () => {
 
 export default function HomeScreen() {
   const router = useRouter()
+  const { t } = useLanguage()
+  const DAYS_SHORT = t('days_short').split(',')
   const [profile, setProfile] = useState<Profile | null>(null)
   const [checkinConfig, setCheckinConfig] = useState<CheckinConfig | null>(null)
   const [todayCheckin, setTodayCheckin] = useState<TodayCheckin>(null)
@@ -33,8 +38,8 @@ export default function HomeScreen() {
   const [hasTrainingDayPlan, setHasTrainingDayPlan] = useState(false)
   const [unreadMessages, setUnreadMessages] = useState(0)
   const [loading, setLoading] = useState(true)
-  const [nextTraining, setNextTraining] = useState<string | null>(null)
-  const [nextMeal, setNextMeal] = useState<string | null>(null)
+  const [trainingPlanName, setTrainingPlanName] = useState<string | null>(null)
+  const [nutritionPlanName, setNutritionPlanName] = useState<string | null>(null)
   const [checkinParams, setCheckinParams] = useState<CheckinParam[]>([])
   const [selectedParam, setSelectedParam] = useState<CheckinParam | null>(null)
   const [chartData, setChartData] = useState<ChartPoint[]>([])
@@ -47,8 +52,23 @@ export default function HomeScreen() {
   const [savingTrainingDay, setSavingTrainingDay] = useState(false)
 
   const today = getToday()
+  const [userId, setUserId] = useState<string | null>(null)
 
   useEffect(() => { fetchData() }, [])
+
+  // Refresh unread count every time Home comes into focus (e.g. after visiting Chat)
+  useFocusEffect(
+    useCallback(() => {
+      if (!clientId || !userId) return
+      supabase
+        .from('messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('client_id', clientId)
+        .eq('read', false)
+        .neq('sender_id', userId)
+        .then(({ count }) => setUnreadMessages(count ?? 0))
+    }, [clientId, userId]),
+  )
 
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -66,6 +86,7 @@ export default function HomeScreen() {
     const tId = cData.trainer_id
     setClientId(cId)
     setTrainerId(tId)
+    setUserId(user.id)
 
     const [
       { data: configData }, { data: checkinData },
@@ -105,24 +126,34 @@ export default function HomeScreen() {
       .eq('client_id', cId).eq('active', true).limit(1).single()
     if (wpData?.workout_plan_id) {
       const { data: planData } = await supabase
-        .from('workout_plans').select('days').eq('id', wpData.workout_plan_id).single()
-      if (planData?.days) {
-        const weekStart = (() => {
-          const now = new Date(); const day = now.getDay()
-          const diff = day === 0 ? -6 : 1 - day
-          const mon = new Date(now); mon.setDate(now.getDate() + diff); mon.setHours(0,0,0,0)
-          return mon.toISOString().split('T')[0]
-        })()
-        const { data: weekLogs } = await supabase.from('workout_logs')
-          .select('day_name').eq('client_id', cId).gte('date', weekStart)
-        const doneNames = new Set(weekLogs?.map((l: any) => l.day_name) || [])
-        const next = planData.days.find((d: any) => !doneNames.has(d.name)) || planData.days[0]
-        setNextTraining(next?.name || null)
+        .from('workout_plans').select('name, days').eq('id', wpData.workout_plan_id).single()
+      if (planData) {
+        if (planData.name) setTrainingPlanName(planData.name)
+        if (planData.days) {
+          const weekStart = (() => {
+            const now = new Date(); const day = now.getDay()
+            const diff = day === 0 ? -6 : 1 - day
+            const mon = new Date(now); mon.setDate(now.getDate() + diff); mon.setHours(0,0,0,0)
+            return mon.toISOString().split('T')[0]
+          })()
+          const { data: weekLogs } = await supabase.from('workout_logs')
+            .select('day_name').eq('client_id', cId).gte('date', weekStart)
+          const doneNames = new Set(weekLogs?.map((l: any) => l.day_name) || [])
+          const next = planData.days.find((d: any) => !doneNames.has(d.name)) || planData.days[0]
+          void next // next training day no longer shown in stat row
+        }
       }
     }
 
-    const trainingAnswered = dailyLogData?.is_training_day ?? null
-    await loadNextMeal(cId, hasTypedPlans, trainingAnswered)
+    // Nutrition plan name
+    const { data: mpAssigned } = await supabase
+      .from('client_meal_plans').select('meal_plan_id')
+      .eq('client_id', cId).eq('active', true).limit(1).single()
+    if (mpAssigned?.meal_plan_id) {
+      const { data: mpNameData } = await supabase
+        .from('meal_plans').select('name').eq('id', mpAssigned.meal_plan_id).single()
+      if (mpNameData?.name) setNutritionPlanName(mpNameData.name)
+    }
 
     if (paramsData && paramsData.length > 0) {
       setCheckinParams(paramsData)
@@ -131,38 +162,6 @@ export default function HomeScreen() {
     }
 
     setLoading(false)
-  }
-
-  const loadNextMeal = async (cId: string, hasTypedPlans: boolean, isTraining: boolean | null) => {
-    const { data: allPlans } = await supabase
-      .from('client_meal_plans').select('meal_plan_id, plan_type')
-      .eq('client_id', cId).eq('active', true)
-    if (!allPlans || allPlans.length === 0) return
-
-    let targetPlan = allPlans[0]
-    if (hasTypedPlans && isTraining !== null) {
-      const wantedType = isTraining ? 'training_day' : 'rest_day'
-      const typed = allPlans.find(p => p.plan_type === wantedType)
-      if (typed) targetPlan = typed
-    }
-
-    const { data: mpData } = await supabase
-      .from('meal_plans').select('meals').eq('id', targetPlan.meal_plan_id).single()
-    if (!mpData?.meals?.length) return
-
-    const meals: any[] = mpData.meals
-    const now = new Date()
-    const currentMinutes = now.getHours() * 60 + now.getMinutes()
-    const withTime = meals.filter((m: any) => m.time)
-    if (withTime.length > 0) {
-      const toMin = (t: string) => { const [h, mm] = t.split(':').map(Number); return h * 60 + mm }
-      const sorted = [...withTime].sort((a, b) =>
-        (toMin(a.time) - currentMinutes + 1440) % 1440 - (toMin(b.time) - currentMinutes + 1440) % 1440
-      )
-      setNextMeal(sorted[0]?.name || meals[0]?.name || null)
-    } else {
-      setNextMeal(meals[0]?.name || null)
-    }
   }
 
   const handleTrainingDayAnswer = async (answer: boolean) => {
@@ -180,7 +179,6 @@ export default function HomeScreen() {
       if (data) setDailyLogId(data.id)
     }
 
-    await loadNextMeal(clientId, hasTrainingDayPlan, answer)
     setSavingTrainingDay(false)
   }
 
@@ -215,9 +213,9 @@ export default function HomeScreen() {
 
   const getGreeting = () => {
     const h = new Date().getHours()
-    if (h < 12) return 'Dobro jutro'
-    if (h < 18) return 'Dobar dan'
-    return 'Dobra večer'
+    if (h < 12) return t('greeting_morning')
+    if (h < 18) return t('greeting_day')
+    return t('greeting_evening')
   }
 
   const firstName = profile?.full_name?.split(' ')[0] || ''
@@ -267,29 +265,37 @@ export default function HomeScreen() {
 
       {/* Header */}
       <View style={styles.headerBg}>
+        {/* UnitLift branding row */}
+        <View style={styles.brandRow}>
+          <View style={styles.brandLeft}>
+            <UnitLiftLogo size={28} borderRadius={8} />
+            <Text style={styles.brandName}>UnitLift</Text>
+          </View>
+          <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsBtn} activeOpacity={0.7}>
+            <Text style={styles.settingsIcon}>⚙</Text>
+          </TouchableOpacity>
+        </View>
+        {/* Greeting row */}
         <View style={styles.header}>
           <View>
             <Text style={styles.greeting}>{getGreeting()}</Text>
             <Text style={styles.name}>{firstName} 👋</Text>
           </View>
-          <TouchableOpacity onPress={handleLogout} style={styles.logoutBtn}>
-            <Text style={styles.logoutText}>Odjava</Text>
-          </TouchableOpacity>
         </View>
         {isCheckinDay && !todayCheckin ? (
           <TouchableOpacity style={styles.checkinAlert} onPress={() => router.push('/(tabs)/5-checkin')}>
             <View style={styles.checkinAlertLeft}>
-              <Text style={styles.checkinAlertEmoji}>📋</Text>
+              <ClipboardCheck size={20} color="white" strokeWidth={2} />
               <View>
-                <Text style={styles.checkinAlertTitle}>Check-in te čeka!</Text>
-                <Text style={styles.checkinAlertSub}>Danas je tvoj dan — pošalji sada</Text>
+                <Text style={styles.checkinAlertTitle}>{t('home_checkin_alert_title')}</Text>
+                <Text style={styles.checkinAlertSub}>{t('home_checkin_alert_sub')}</Text>
               </View>
             </View>
-            <Text style={styles.checkinAlertArrow}>→</Text>
+            <Text style={styles.checkinAlertArrow}>›</Text>
           </TouchableOpacity>
         ) : todayCheckin ? (
           <View style={styles.checkinDone}>
-            <Text style={styles.checkinDoneText}>✓ Današnji check-in poslan</Text>
+            <Text style={styles.checkinDoneText}>{t('home_checkin_done')}</Text>
           </View>
         ) : null}
       </View>
@@ -297,24 +303,24 @@ export default function HomeScreen() {
       {/* Stats row */}
       <View style={styles.statsRow}>
         <TouchableOpacity style={styles.statCard} onPress={() => router.push('/(tabs)/1-training')}>
-          <Text style={styles.statEmoji}>🏋️</Text>
-          <Text style={styles.statLabel}>Trening</Text>
+          <Dumbbell size={16} color="#6366f1" strokeWidth={2} />
+          <Text style={styles.statLabel}>{t('tab_training')}</Text>
           <Text style={[styles.statValue, !hasTraining && styles.statValueOff]} numberOfLines={1}>
-            {hasTraining && nextTraining ? nextTraining : hasTraining ? 'Aktivan' : 'Nema'}
+            {hasTraining ? (trainingPlanName ?? t('active')) : t('none')}
           </Text>
         </TouchableOpacity>
         <View style={styles.statDivider} />
         <TouchableOpacity style={styles.statCard} onPress={() => router.push('/(tabs)/2-nutrition')}>
-          <Text style={styles.statEmoji}>🥗</Text>
-          <Text style={styles.statLabel}>Prehrana</Text>
+          <Salad size={16} color="#10b981" strokeWidth={2} />
+          <Text style={styles.statLabel}>{t('tab_nutrition')}</Text>
           <Text style={[styles.statValue, !hasNutrition && styles.statValueOff]} numberOfLines={1}>
-            {hasNutrition && nextMeal ? nextMeal : hasNutrition ? 'Aktivan' : 'Nema'}
+            {hasNutrition ? (nutritionPlanName ?? t('active')) : t('none')}
           </Text>
         </TouchableOpacity>
         <View style={styles.statDivider} />
         <TouchableOpacity style={styles.statCard} onPress={() => router.push('/(tabs)/5-checkin')}>
-          <Text style={styles.statEmoji}>📊</Text>
-          <Text style={styles.statLabel}>Check-in</Text>
+          <BarChart2 size={16} color="#f59e0b" strokeWidth={2} />
+          <Text style={styles.statLabel}>{t('home_checkin_day')}</Text>
           <Text style={styles.statValue}>
             {checkinConfig?.checkin_day != null ? DAYS_SHORT[checkinConfig.checkin_day] : 'N/A'}
           </Text>
@@ -325,17 +331,25 @@ export default function HomeScreen() {
       {(hasTrainingDayPlan || hasTraining) && (
         <View style={styles.trainingDayCard}>
           <View style={styles.trainingDayLeft}>
-            <Text style={styles.trainingDayEmoji}>
-              {isTrainingDay === true ? '💪' : isTrainingDay === false ? '😌' : '❓'}
-            </Text>
+            <View style={[
+              styles.trainingDayIconBox,
+              isTrainingDay === true && styles.trainingDayIconBoxYes,
+              isTrainingDay === false && styles.trainingDayIconBoxNo,
+            ]}>
+              <Dumbbell
+                size={16}
+                color={isTrainingDay === true ? '#3b82f6' : isTrainingDay === false ? '#8b5cf6' : '#9ca3af'}
+                strokeWidth={2}
+              />
+            </View>
             <View>
-              <Text style={styles.trainingDayTitle}>Treniraš danas?</Text>
+              <Text style={styles.trainingDayTitle}>{t('home_training_today')}</Text>
               {isTrainingDay !== null ? (
                 <Text style={styles.trainingDayAnswer}>
-                  {isTrainingDay ? 'Da — plan prehrane za trening' : 'Ne — plan prehrane za odmor'}
+                  {isTrainingDay ? t('home_training_day_yes') : t('home_training_day_no')}
                 </Text>
               ) : (
-                <Text style={styles.trainingDayHint}>Odgovori da vidimo pravi plan prehrane</Text>
+                <Text style={styles.trainingDayHint}>{t('home_training_hint')}</Text>
               )}
             </View>
           </View>
@@ -345,51 +359,79 @@ export default function HomeScreen() {
               onPress={() => handleTrainingDayAnswer(true)}
               disabled={savingTrainingDay}
             >
-              <Text style={[styles.trainingBtnText, isTrainingDay === true && styles.trainingBtnTextActive]}>Da</Text>
+              <Text style={[styles.trainingBtnText, isTrainingDay === true && styles.trainingBtnTextActive]}>{t('yes')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.trainingBtn, isTrainingDay === false && styles.trainingBtnActiveNo]}
               onPress={() => handleTrainingDayAnswer(false)}
               disabled={savingTrainingDay}
             >
-              <Text style={[styles.trainingBtnText, isTrainingDay === false && styles.trainingBtnTextActive]}>Ne</Text>
+              <Text style={[styles.trainingBtnText, isTrainingDay === false && styles.trainingBtnTextActive]}>{t('no')}</Text>
             </TouchableOpacity>
           </View>
         </View>
       )}
 
       {/* Quick actions */}
-      <Text style={styles.sectionTitle}>Brzi pristup</Text>
+      <Text style={styles.sectionTitle}>{t('home_quick_access')}</Text>
       <View style={styles.grid}>
-        <TouchableOpacity style={[styles.quickCard, styles.quickCardBlue]} onPress={() => router.push('/(tabs)/1-training')} activeOpacity={0.85}>
+
+        <TouchableOpacity style={[styles.quickCard, { backgroundColor: '#3b82f6' }]} onPress={() => router.push('/(tabs)/1-training')} activeOpacity={0.85}>
           <Text style={styles.quickCardEmoji}>🏋️</Text>
-          <Text style={styles.quickCardTitle}>Trening</Text>
-          <Text style={styles.quickCardSub}>{hasTraining ? 'Pregled plana →' : 'Nema plana'}</Text>
+          <Text style={styles.quickCardTitle}>{t('home_training')}</Text>
+          <Text style={styles.quickCardSub}>{hasTraining ? (trainingPlanName ?? t('home_plan_view')) : t('home_plan_none')}</Text>
+          <Text style={styles.quickCardArrow}>›</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.quickCard, styles.quickCardGreen]} onPress={() => router.push('/(tabs)/2-nutrition')} activeOpacity={0.85}>
+
+        <TouchableOpacity style={[styles.quickCard, { backgroundColor: '#22c55e' }]} onPress={() => router.push('/(tabs)/2-nutrition')} activeOpacity={0.85}>
           <Text style={styles.quickCardEmoji}>🥗</Text>
-          <Text style={styles.quickCardTitle}>Prehrana</Text>
-          <Text style={styles.quickCardSub}>{hasNutrition ? 'Pregled plana →' : 'Nema plana'}</Text>
+          <Text style={styles.quickCardTitle}>{t('home_nutrition')}</Text>
+          <Text style={styles.quickCardSub}>{hasNutrition ? (nutritionPlanName ?? t('home_plan_view')) : t('home_plan_none')}</Text>
+          <Text style={styles.quickCardArrow}>›</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.quickCard, styles.quickCardPurple]} onPress={() => router.push('/(tabs)/4-chat')} activeOpacity={0.85}>
+
+        <TouchableOpacity style={[styles.quickCard, { backgroundColor: '#8b5cf6' }]} onPress={() => router.push('/(tabs)/4-chat')} activeOpacity={0.85}>
           <Text style={styles.quickCardEmoji}>💬</Text>
-          <Text style={styles.quickCardTitle}>Chat</Text>
-          <Text style={styles.quickCardSub}>{unreadMessages > 0 ? `${unreadMessages} novih →` : 'Poruke →'}</Text>
+          <Text style={styles.quickCardTitle}>{t('home_chat')}</Text>
+          <Text style={styles.quickCardSub}>{unreadMessages > 0 ? `${unreadMessages} ${t('home_chat_new')}` : t('home_chat_messages')}</Text>
+          <Text style={styles.quickCardArrow}>›</Text>
           {unreadMessages > 0 && (
             <View style={styles.unreadBadge}><Text style={styles.unreadBadgeText}>{unreadMessages}</Text></View>
           )}
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.quickCard, styles.quickCardOrange]} onPress={() => router.push('/(tabs)/5-checkin')} activeOpacity={0.85}>
-          <Text style={styles.quickCardEmoji}>📊</Text>
-          <Text style={styles.quickCardTitle}>Check-in</Text>
-          <Text style={styles.quickCardSub}>Unesi podatke →</Text>
+
+        <TouchableOpacity style={[styles.quickCard, { backgroundColor: '#f97316' }]} onPress={() => router.push('/(tabs)/5-checkin')} activeOpacity={0.85}>
+          <Text style={styles.quickCardEmoji}>📋</Text>
+          <Text style={styles.quickCardTitle}>{t('home_checkin')}</Text>
+          <Text style={styles.quickCardSub}>{t('home_checkin_sub')}</Text>
+          <Text style={styles.quickCardArrow}>›</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.quickCard, { backgroundColor: '#6366f1' }]} onPress={() => router.push('/package')} activeOpacity={0.85}>
+          <Text style={styles.quickCardEmoji}>📦</Text>
+          <Text style={styles.quickCardTitle}>{t('home_package')}</Text>
+          <Text style={styles.quickCardSub}>{t('home_package_sub')}</Text>
+          <Text style={styles.quickCardArrow}>›</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.quickCard, { backgroundColor: '#64748b' }]} onPress={() => router.push('/timeline')} activeOpacity={0.85}>
+          <Text style={styles.quickCardEmoji}>📅</Text>
+          <Text style={styles.quickCardTitle}>{t('home_history')}</Text>
+          <Text style={styles.quickCardSub}>{t('home_history_sub')}</Text>
+          <Text style={styles.quickCardArrow}>›</Text>
+        </TouchableOpacity>
+
       </View>
 
       {/* Progress chart */}
       {checkinParams.length > 0 && (
         <View style={styles.chartCard}>
-          <Text style={styles.chartTitle}>Napredak</Text>
+          <View style={styles.chartTitleRow}>
+            <Text style={styles.chartTitle}>{t('home_progress')}</Text>
+            <TouchableOpacity onPress={() => router.push('/metrics')} activeOpacity={0.75}>
+              <Text style={styles.allMetricsLink}>{t('home_all_metrics')}</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity style={styles.paramSelector} onPress={() => setShowParamPicker(true)}>
             <Text style={styles.paramSelectorText}>{selectedParam?.name || 'Odaberi'}</Text>
             {selectedParam?.unit && <Text style={styles.paramSelectorUnit}>{selectedParam.unit}</Text>}
@@ -398,7 +440,7 @@ export default function HomeScreen() {
 
           {chartData.length === 0 ? (
             <View style={styles.chartEmpty}>
-              <Text style={styles.chartEmptyText}>Nema podataka za ovaj parametar</Text>
+              <Text style={styles.chartEmptyText}>{t('home_chart_no_data')}</Text>
             </View>
           ) : (
             <View>
@@ -527,36 +569,45 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f3f4f6' },
 
   headerBg: {
-    backgroundColor: '#1e1b4b', paddingTop: 56, paddingHorizontal: 20,
-    paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,
+    backgroundColor: '#1d4ed8', paddingTop: 60, paddingHorizontal: 24,
+    paddingBottom: 28, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 20,
   },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 },
-  greeting: { fontSize: 14, color: '#a5b4fc', fontWeight: '500' },
-  name: { fontSize: 28, fontWeight: '800', color: 'white', marginTop: 2 },
-  logoutBtn: { paddingHorizontal: 12, paddingVertical: 6, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 8 },
-  logoutText: { fontSize: 13, color: '#a5b4fc' },
+  brandRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 18,
+  },
+  brandLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  brandName: { fontSize: 16, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.2 },
+  header: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-start', marginBottom: 22 },
+  greeting: { fontSize: 13, color: 'rgba(255,255,255,0.65)', fontWeight: '500', letterSpacing: 0.3 },
+  name: { fontSize: 28, fontWeight: '800', color: 'white', marginTop: 3, letterSpacing: -0.5 },
+  settingsBtn: {
+    width: 38, height: 38, borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  settingsIcon: { fontSize: 18, color: 'rgba(255,255,255,0.85)' },
 
   checkinAlert: {
-    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 14, padding: 14,
+    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 14, padding: 14,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)',
   },
   checkinAlertLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  checkinAlertEmoji: { fontSize: 28 },
-  checkinAlertTitle: { fontSize: 15, fontWeight: '700', color: 'white' },
-  checkinAlertSub: { fontSize: 12, color: '#a5b4fc', marginTop: 2 },
-  checkinAlertArrow: { fontSize: 20, color: 'white' },
-  checkinDone: { backgroundColor: 'rgba(34,197,94,0.2)', borderRadius: 12, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(34,197,94,0.3)' },
-  checkinDoneText: { color: '#86efac', fontWeight: '600', fontSize: 14 },
+  checkinAlertTitle: { fontSize: 14, fontWeight: '700', color: 'white' },
+  checkinAlertSub: { fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
+  checkinAlertArrow: { fontSize: 24, color: 'rgba(255,255,255,0.65)', fontWeight: '300' },
+  checkinDone: { backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: 11, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)' },
+  checkinDoneText: { color: 'rgba(255,255,255,0.85)', fontWeight: '600', fontSize: 13 },
 
   statsRow: {
     flexDirection: 'row', backgroundColor: 'white', borderRadius: 16,
-    marginHorizontal: 20, marginBottom: 16, paddingVertical: 16,
+    marginHorizontal: 20, marginBottom: 16, paddingVertical: 18,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
   },
-  statCard: { flex: 1, alignItems: 'center', gap: 4 },
-  statDivider: { width: 1, backgroundColor: '#f3f4f6', marginVertical: 4 },
-  statEmoji: { fontSize: 22 },
+  statCard: { flex: 1, alignItems: 'center', gap: 6 },
+  statDivider: { width: 1, backgroundColor: '#f3f4f6', marginVertical: 6 },
   statLabel: { fontSize: 11, color: '#9ca3af', fontWeight: '500' },
   statValue: { fontSize: 12, fontWeight: '700', color: '#111827', textAlign: 'center', paddingHorizontal: 4 },
   statValueOff: { color: '#d1d5db' },
@@ -567,7 +618,12 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
   },
   trainingDayLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
-  trainingDayEmoji: { fontSize: 28 },
+  trainingDayIconBox: {
+    width: 36, height: 36, borderRadius: 10, backgroundColor: '#f3f4f6',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  trainingDayIconBoxYes: { backgroundColor: '#eff6ff' },
+  trainingDayIconBoxNo:  { backgroundColor: '#f5f3ff' },
   trainingDayTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
   trainingDayAnswer: { fontSize: 12, color: '#6b7280', marginTop: 2 },
   trainingDayHint: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
@@ -578,21 +634,18 @@ const styles = StyleSheet.create({
   trainingBtnText: { fontSize: 13, fontWeight: '700', color: '#6b7280' },
   trainingBtnTextActive: { color: 'white' },
 
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#6b7280', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12, marginHorizontal: 20 },
+  sectionTitle: { fontSize: 11, fontWeight: '700', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 1.2, marginBottom: 14, marginHorizontal: 20 },
 
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingHorizontal: 20, marginBottom: 24 },
   quickCard: {
-    width: '47%', borderRadius: 20, padding: 18, position: 'relative',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 3,
+    width: '47%', borderRadius: 18, padding: 16, position: 'relative',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12, shadowRadius: 10, elevation: 4,
   },
-  quickCardBlue: { backgroundColor: '#3b82f6' },
-  quickCardGreen: { backgroundColor: '#10b981' },
-  quickCardPurple: { backgroundColor: '#8b5cf6' },
-  quickCardOrange: { backgroundColor: '#f59e0b' },
-  quickCardEmoji: { fontSize: 32, marginBottom: 12 },
-  quickCardTitle: { fontSize: 15, fontWeight: '700', color: 'white', marginBottom: 4 },
-  quickCardSub: { fontSize: 12, color: 'rgba(255,255,255,0.75)' },
-  unreadBadge: { position: 'absolute', top: 12, right: 12, backgroundColor: '#ef4444', borderRadius: 99, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
+  quickCardEmoji: { fontSize: 22, marginBottom: 10 },
+  quickCardTitle: { fontSize: 14, fontWeight: '700', color: 'white', marginBottom: 3 },
+  quickCardSub: { fontSize: 12, color: 'rgba(255,255,255,0.75)', fontWeight: '500' },
+  quickCardArrow: { position: 'absolute', right: 14, bottom: 14, fontSize: 18, color: 'rgba(255,255,255,0.5)', fontWeight: '300' },
+  unreadBadge: { position: 'absolute', top: 10, right: 10, backgroundColor: '#ef4444', borderRadius: 99, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5, borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)' },
   unreadBadgeText: { color: 'white', fontSize: 11, fontWeight: '700' },
 
   chartCard: {
@@ -600,7 +653,9 @@ const styles = StyleSheet.create({
     padding: 18, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
   },
-  chartTitle: { fontSize: 15, fontWeight: '700', color: '#111827', marginBottom: 12 },
+  chartTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  chartTitle: { fontSize: 15, fontWeight: '700', color: '#111827' },
+  allMetricsLink: { fontSize: 13, color: '#4f46e5', fontWeight: '600' },
   chartEmpty: { height: 100, alignItems: 'center', justifyContent: 'center' },
   chartEmptyText: { fontSize: 13, color: '#9ca3af', textAlign: 'center' },
   yLabel: { fontSize: 10, color: '#9ca3af' },

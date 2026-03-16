@@ -1,4 +1,6 @@
 import { supabase } from '@/lib/supabase';
+import { useLanguage } from '@/lib/LanguageContext'
+import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
@@ -45,6 +47,8 @@ const getToday = () => {
 }
 
 export default function NutritionScreen() {
+  const router = useRouter()
+  const { t } = useLanguage()
   const [plan, setPlan] = useState<MealPlan | null>(null)
   const [altPlan, setAltPlan] = useState<MealPlan | null>(null)
   const [planMode, setPlanMode] = useState<'training_day' | 'rest_day' | 'default' | null>(null)
@@ -232,9 +236,35 @@ export default function NutritionScreen() {
   const confirmDay = async () => {
     if (!plan) return
     setSaving(true)
-    await upsertLog(plan, completedMeals, macros, true)
+
+    // If client hasn't manually entered macros, auto-fill from confirmed meals' plan data
+    const hasManualMacros = Object.values(macros).some(v => v && v !== '' && v !== '0')
+    let finalMacros = macros
+
+    if (!hasManualMacros && completedMeals.length > 0) {
+      const confirmedMealData = plan.meals.filter(m => completedMeals.includes(m.id))
+      const totals = confirmedMealData.reduce(
+        (acc, meal) => ({
+          calories: acc.calories + (meal.calories ?? 0),
+          protein:  acc.protein  + (meal.protein  ?? 0),
+          carbs:    acc.carbs    + (meal.carbs     ?? 0),
+          fat:      acc.fat      + (meal.fat       ?? 0),
+        }),
+        { calories: 0, protein: 0, carbs: 0, fat: 0 },
+      )
+      finalMacros = {
+        calories: totals.calories > 0 ? String(Math.round(totals.calories)) : '',
+        protein:  totals.protein  > 0 ? String(Math.round(totals.protein))  : '',
+        carbs:    totals.carbs    > 0 ? String(Math.round(totals.carbs))    : '',
+        fat:      totals.fat      > 0 ? String(Math.round(totals.fat))      : '',
+      }
+      // Also update the UI state so user can see what was auto-filled
+      setMacros(finalMacros)
+    }
+
+    await upsertLog(plan, completedMeals, finalMacros, true)
     setSaving(false)
-    Alert.alert('✓ Dan potvrđen!', 'Tvoj unos za danas je spremljen.')
+    Alert.alert(t('nutr_day_confirmed_alert'), t('nutr_day_confirmed_msg'))
   }
 
   if (loading) return (
@@ -243,12 +273,11 @@ export default function NutritionScreen() {
     </View>
   )
 
-  // Not answered yet and both plans exist — show prompt
   if (!plan || (isTrainingDay === null && !plan)) return (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyEmoji}>🥗</Text>
-      <Text style={styles.emptyTitle}>Nema aktivnog plana</Text>
-      <Text style={styles.emptySub}>Tvoj trener još nije dodijelio plan prehrane.</Text>
+      <Text style={{ fontSize: 28, marginBottom: 10 }}>🥗</Text>
+      <Text style={styles.emptyTitle}>{t('nutr_empty_title')}</Text>
+      <Text style={styles.emptySub}>{t('nutr_empty_sub')}</Text>
     </View>
   )
 
@@ -260,9 +289,9 @@ export default function NutritionScreen() {
   const showUnansweredBanner = isTrainingDay === null && altPlan !== null
 
   const planBadge = planMode === 'training_day'
-    ? { label: '💪 Dan treninga', sub: 'Više kalorija i proteina' }
+    ? { label: t('nutr_training_day'), sub: t('nutr_training_more') }
     : planMode === 'rest_day'
-    ? { label: '😌 Dan odmora', sub: 'Manji unos kalorija' }
+    ? { label: t('nutr_rest_day'), sub: t('nutr_rest_less') }
     : null
 
   return (
@@ -273,14 +302,23 @@ export default function NutritionScreen() {
         {/* Header */}
         <View style={styles.headerBg}>
           <View style={styles.headerTop}>
-            <Text style={styles.headerLabel}>Plan prehrane</Text>
-            {altPlan && (
-              <TouchableOpacity onPress={switchPlan} style={styles.switchBtn}>
-                <Text style={styles.switchBtnText}>
-                  {planMode === 'training_day' ? '😌 Odmor' : '💪 Trening'}
-                </Text>
+            <Text style={styles.headerLabel}>{t('nutr_plan_label')}</Text>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity
+                onPress={() => router.push('/nutrition-history')}
+                style={styles.switchBtn}
+                activeOpacity={0.75}
+              >
+                <Text style={styles.switchBtnText}>{t('nutr_history')}</Text>
               </TouchableOpacity>
-            )}
+              {altPlan && (
+                <TouchableOpacity onPress={switchPlan} style={styles.switchBtn}>
+                  <Text style={styles.switchBtnText}>
+                    {planMode === 'training_day' ? t('nutr_switch_rest') : t('nutr_switch_train')}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
           <Text style={styles.headerTitle}>{plan!.name}</Text>
 
@@ -302,19 +340,19 @@ export default function NutritionScreen() {
               {plan!.protein_target && (
                 <View style={styles.macroItem}>
                   <Text style={styles.macroValue}>{plan!.protein_target}g</Text>
-                  <Text style={styles.macroLabel}>Proteini</Text>
+                  <Text style={styles.macroLabel}>{t('nutr_protein')}</Text>
                 </View>
               )}
               {plan!.carbs_target && (
                 <View style={styles.macroItem}>
                   <Text style={styles.macroValue}>{plan!.carbs_target}g</Text>
-                  <Text style={styles.macroLabel}>Ugljikohidrati</Text>
+                  <Text style={styles.macroLabel}>{t('nutr_carbs')}</Text>
                 </View>
               )}
               {plan!.fat_target && (
                 <View style={styles.macroItem}>
                   <Text style={styles.macroValue}>{plan!.fat_target}g</Text>
-                  <Text style={styles.macroLabel}>Masti</Text>
+                  <Text style={styles.macroLabel}>{t('nutr_fat')}</Text>
                 </View>
               )}
             </View>
@@ -322,8 +360,8 @@ export default function NutritionScreen() {
 
           <View>
             <View style={styles.dayProgressHeader}>
-              <Text style={styles.dayProgressLabel}>Danas</Text>
-              <Text style={styles.dayProgressCount}>{completedCount} / {totalMeals} obroka</Text>
+              <Text style={styles.dayProgressLabel}>{t('nutr_today')}</Text>
+              <Text style={styles.dayProgressCount}>{completedCount} / {totalMeals} {t('nutr_meals_count')}</Text>
             </View>
             <View style={styles.dayProgressBar}>
               <View style={[styles.dayProgressFill, {
@@ -337,32 +375,31 @@ export default function NutritionScreen() {
         {/* Unanswered banner — nudge to go answer on home */}
         {showUnansweredBanner && (
           <View style={styles.unansweredBanner}>
-            <Text style={styles.unansweredEmoji}>❓</Text>
             <View style={{ flex: 1 }}>
-              <Text style={styles.unansweredTitle}>Treniraš danas?</Text>
-              <Text style={styles.unansweredSub}>Odgovori na početnom ekranu da vidimo pravi plan</Text>
+              <Text style={styles.unansweredTitle}>{t('nutr_unanswered_title')}</Text>
+              <Text style={styles.unansweredSub}>{t('nutr_unanswered_sub')}</Text>
             </View>
           </View>
         )}
 
         {isConfirmed && (
           <View style={styles.confirmedBanner}>
-            <Text style={styles.confirmedEmoji}>✅</Text>
+            <View style={styles.confirmedCheck}><Text style={styles.confirmedCheckText}>✓</Text></View>
             <View>
-              <Text style={styles.confirmedTitle}>Dan potvrđen!</Text>
-              <Text style={styles.confirmedSub}>Prehrana za danas je zapisana</Text>
+              <Text style={styles.confirmedTitle}>{t('nutr_confirmed_title')}</Text>
+              <Text style={styles.confirmedSub}>{t('nutr_confirmed_sub')}</Text>
             </View>
           </View>
         )}
 
         {plan!.notes && (
           <View style={styles.notesCard}>
-            <Text style={styles.notesLabel}>📝 Napomena trenera</Text>
+            <Text style={styles.notesLabel}>{t('trainer_note')}</Text>
             <Text style={styles.notesText}>{plan!.notes}</Text>
           </View>
         )}
 
-        <Text style={styles.sectionTitle}>Obroci</Text>
+        <Text style={styles.sectionTitle}>{t('nutr_meals_title')}</Text>
         {plan!.meals.map((meal) => {
           const isCompleted = completedMeals.includes(meal.id)
           const isExpanded = expandedMeal === meal.id
@@ -393,9 +430,9 @@ export default function NutritionScreen() {
                   <View style={styles.mealMacroRow}>
                     {[
                       { v: meal.calories, l: 'kcal' },
-                      { v: `${meal.protein}g`, l: 'Proteini' },
-                      { v: `${meal.carbs}g`, l: 'Ugljikohidrati' },
-                      { v: `${meal.fat}g`, l: 'Masti' },
+                      { v: `${meal.protein}g`, l: t('nutr_protein') },
+                      { v: `${meal.carbs}g`, l: t('nutr_carbs') },
+                      { v: `${meal.fat}g`, l: t('nutr_fat') },
                     ].map((item, i) => (
                       <View key={i} style={{ flex: 1, alignItems: 'center' }}>
                         <Text style={styles.mealMacroValue}>{item.v}</Text>
@@ -407,7 +444,7 @@ export default function NutritionScreen() {
 
                   {meal.ingredients?.length > 0 && (
                     <>
-                      <Text style={styles.ingredientsTitle}>Sastojci</Text>
+                      <Text style={styles.ingredientsTitle}>{t('nutr_ingredients')}</Text>
                       {meal.ingredients.map((ing: Ingredient, i: number) => (
                         <View key={i} style={styles.ingredientRow}>
                           <View style={styles.ingredientLeft}>
@@ -437,15 +474,15 @@ export default function NutritionScreen() {
           )
         })}
 
-        <Text style={styles.sectionTitle}>Unos makroa za danas</Text>
+        <Text style={styles.sectionTitle}>{t('nutr_macros_title')}</Text>
         <View style={styles.macroInputCard}>
-          <Text style={styles.macroInputDesc}>Unesi stvarno konzumirane makroe na kraju dana</Text>
+          <Text style={styles.macroInputDesc}>{t('nutr_macros_desc')}</Text>
           <View style={styles.macroInputGrid}>
             {[
-              { key: 'calories', label: 'Kalorije', unit: 'kcal', color: '#f97316' },
-              { key: 'protein', label: 'Proteini', unit: 'g', color: '#3b82f6' },
-              { key: 'carbs', label: 'Ugljikohidrati', unit: 'g', color: '#10b981' },
-              { key: 'fat', label: 'Masti', unit: 'g', color: '#8b5cf6' },
+              { key: 'calories', label: t('nutr_kcal'), unit: 'kcal', color: '#f97316' },
+              { key: 'protein', label: t('nutr_protein'), unit: 'g', color: '#3b82f6' },
+              { key: 'carbs', label: t('nutr_carbs'), unit: 'g', color: '#10b981' },
+              { key: 'fat', label: t('nutr_fat'), unit: 'g', color: '#8b5cf6' },
             ].map(item => (
               <View key={item.key} style={styles.macroInputItem}>
                 <Text style={[styles.macroInputLabel, { color: item.color }]}>{item.label}</Text>
@@ -470,7 +507,7 @@ export default function NutritionScreen() {
       <View style={styles.stickyFooter}>
         {!isConfirmed ? (
           <TouchableOpacity style={styles.confirmBtn} onPress={confirmDay} disabled={saving}>
-            <Text style={styles.confirmBtnText}>{saving ? 'Sprema...' : '✓ Potvrdi dan'}</Text>
+            <Text style={styles.confirmBtnText}>{saving ? t('nutr_saving') : t('nutr_confirm_btn')}</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -478,7 +515,7 @@ export default function NutritionScreen() {
             onPress={() => log && supabase.from('nutrition_logs').update({ confirmed: false })
               .eq('id', log.id).then(() => setLog(prev => prev ? { ...prev, confirmed: false } : null))}
           >
-            <Text style={styles.editBtnText}>Uredi unos</Text>
+            <Text style={styles.editBtnText}>{t('nutr_edit_btn')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -491,7 +528,6 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 32 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyEmoji: { fontSize: 56, marginBottom: 16 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
 
@@ -526,14 +562,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#fefce8', borderRadius: 14, marginHorizontal: 20, marginBottom: 12,
     padding: 14, borderWidth: 1, borderColor: '#fde68a',
   },
-  unansweredEmoji: { fontSize: 24 },
   unansweredTitle: { fontSize: 14, fontWeight: '700', color: '#92400e' },
   unansweredSub: { fontSize: 12, color: '#b45309', marginTop: 2 },
 
   confirmedBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#f0fdf4', borderRadius: 14, marginHorizontal: 20, marginBottom: 12, padding: 14, borderWidth: 1, borderColor: '#86efac' },
-  confirmedEmoji: { fontSize: 28 },
+  confirmedCheck: { width: 32, height: 32, borderRadius: 99, backgroundColor: '#22c55e', alignItems: 'center', justifyContent: 'center' },
+  confirmedCheckText: { color: 'white', fontSize: 16, fontWeight: '700' },
   confirmedTitle: { fontSize: 15, fontWeight: '700', color: '#15803d' },
-  confirmedSub: { fontSize: 12, color: '#4ade80', marginTop: 2 },
+  confirmedSub: { fontSize: 12, color: '#86efac', marginTop: 2 },
 
   notesCard: { backgroundColor: '#fffbeb', borderRadius: 14, padding: 14, marginHorizontal: 20, marginBottom: 16, borderLeftWidth: 3, borderLeftColor: '#f59e0b' },
   notesLabel: { fontSize: 12, fontWeight: '700', color: '#92400e', marginBottom: 4 },

@@ -1,4 +1,6 @@
 import { supabase } from '@/lib/supabase'
+import { useLanguage } from '@/lib/LanguageContext'
+import { useNavigation, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator, Alert, Animated, KeyboardAvoidingView, Linking, Modal,
@@ -71,6 +73,7 @@ const getWeekEnd = () => {
 
 // ── Rest Timer ────────────────────────────────────────────────────────────────
 function RestTimer({ seconds, onDone }: { seconds: number; onDone: () => void }) {
+  const { t } = useLanguage()
   const [remaining, setRemaining] = useState(seconds)
   const progress = useRef(new Animated.Value(1)).current
 
@@ -94,13 +97,13 @@ function RestTimer({ seconds, onDone }: { seconds: number; onDone: () => void })
 
   return (
     <View style={timerStyles.container}>
-      <Text style={timerStyles.label}>Odmor</Text>
+      <Text style={timerStyles.label}>{t('train_rest_label')}</Text>
       <Text style={timerStyles.countdown}>{remaining}s</Text>
       <View style={timerStyles.bar}>
         <Animated.View style={[timerStyles.fill, { width: barWidth }]} />
       </View>
       <TouchableOpacity onPress={onDone} style={timerStyles.skipBtn}>
-        <Text style={timerStyles.skipText}>Preskoči</Text>
+        <Text style={timerStyles.skipText}>{t('skip')}</Text>
       </TouchableOpacity>
     </View>
   )
@@ -123,50 +126,47 @@ const timerStyles = StyleSheet.create({
 
 // ── Exercise Detail Modal ─────────────────────────────────────────────────────
 function ExerciseDetailModal({ exercise, onClose }: { exercise: PlanExercise; onClose: () => void }) {
+  const { t } = useLanguage()
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <View style={detailStyles.container}>
         <View style={detailStyles.header}>
           <Text style={detailStyles.title}>{exercise.name}</Text>
           <TouchableOpacity onPress={onClose} style={detailStyles.closeBtn}>
-            <Text style={detailStyles.closeText}>Zatvori</Text>
+            <Text style={detailStyles.closeText}>{t('train_detail_close')}</Text>
           </TouchableOpacity>
         </View>
 
         <ScrollView style={detailStyles.scroll} contentContainerStyle={{ padding: 20, paddingBottom: 48 }}>
-          {/* Target */}
           <View style={detailStyles.pill}>
             <Text style={detailStyles.pillText}>
-              {exercise.sets} serije × {exercise.reps} ponavljanja
-              {exercise.rest_seconds ? `  ·  ${exercise.rest_seconds}s odmor` : ''}
+              {exercise.sets} {t('per_sets')} × {exercise.reps} {t('per_reps')}
+              {exercise.rest_seconds ? `  ·  ${exercise.rest_seconds}s ${t('rest')}` : ''}
             </Text>
           </View>
 
-          {/* Description */}
           {exercise.description ? (
             <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionLabel}>Opis</Text>
+              <Text style={detailStyles.sectionLabel}>{t('train_detail_desc')}</Text>
               <Text style={detailStyles.sectionText}>{exercise.description}</Text>
             </View>
           ) : null}
 
-          {/* Notes */}
           {exercise.notes ? (
             <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionLabel}>Napomena trenera</Text>
+              <Text style={detailStyles.sectionLabel}>{t('train_detail_note')}</Text>
               <View style={detailStyles.noteBox}>
                 <Text style={detailStyles.noteText}>{exercise.notes}</Text>
               </View>
             </View>
           ) : null}
 
-          {/* Video link */}
           {exercise.video_url ? (
             <View style={detailStyles.section}>
-              <Text style={detailStyles.sectionLabel}>Video</Text>
+              <Text style={detailStyles.sectionLabel}>{t('train_detail_video')}</Text>
               <TouchableOpacity style={detailStyles.videoBtn}
                 onPress={() => exercise.video_url && Linking.openURL(exercise.video_url)}>
-                <Text style={detailStyles.videoBtnText}>▶  Otvori video</Text>
+                <Text style={detailStyles.videoBtnText}>{t('train_detail_video_btn')}</Text>
               </TouchableOpacity>
             </View>
           ) : null}
@@ -209,6 +209,7 @@ function FinishModal({
   onConfirm: () => void
   onCancel: () => void
 }) {
+  const { t } = useLanguage()
   const incomplete = exerciseLogs.flatMap(ex =>
     ex.sets.filter(s => !s.completed).map(s => ({ name: ex.name, set: s.set_number }))
   )
@@ -217,33 +218,33 @@ function FinishModal({
     <Modal visible animationType="fade" transparent onRequestClose={onCancel}>
       <View style={finishStyles.overlay}>
         <View style={finishStyles.card}>
-          <Text style={finishStyles.title}>Završiti trening?</Text>
+          <Text style={finishStyles.title}>{t('train_session_finish')}</Text>
 
           {incomplete.length > 0 ? (
             <>
               <View style={finishStyles.warningBox}>
-                <Text style={finishStyles.warningTitle}>⚠️  Nisu sve serije završene</Text>
+                <Text style={finishStyles.warningTitle}>{t('train_session_incomplete_title')}</Text>
                 {incomplete.slice(0, 4).map((item, i) => (
                   <Text key={i} style={finishStyles.warningItem}>
-                    · {item.name} – serija {item.set}
+                    · {item.name} – {t('per_sets')} {item.set}
                   </Text>
                 ))}
                 {incomplete.length > 4 && (
-                  <Text style={finishStyles.warningItem}>· i još {incomplete.length - 4} serija...</Text>
+                  <Text style={finishStyles.warningItem}>· i još {incomplete.length - 4}...</Text>
                 )}
               </View>
-              <Text style={finishStyles.sub}>Možeš završiti i bez svih serija, ili se vrati i dovrši ih.</Text>
+              <Text style={finishStyles.sub}>{t('train_session_incomplete_sub')}</Text>
             </>
           ) : (
-            <Text style={finishStyles.sub}>Sve serije su završene! Spremi trening? 💪</Text>
+            <Text style={finishStyles.sub}>{t('train_session_all_done')}</Text>
           )}
 
           <View style={finishStyles.btns}>
             <TouchableOpacity onPress={onCancel} style={finishStyles.cancelBtn}>
-              <Text style={finishStyles.cancelText}>Nastavi trening</Text>
+              <Text style={finishStyles.cancelText}>{t('train_session_continue')}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={onConfirm} style={finishStyles.confirmBtn}>
-              <Text style={finishStyles.confirmText}>Spremi</Text>
+              <Text style={finishStyles.confirmText}>{t('train_session_save')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -277,6 +278,7 @@ function UpdateModal({
   onConfirm: (logs: ExerciseLog[]) => void
   onCancel: () => void
 }) {
+  const { t } = useLanguage()
   const [logs, setLogs] = useState<ExerciseLog[]>(exerciseLogs.map(ex => ({
     ...ex,
     sets: ex.sets.map(s => ({ ...s }))
@@ -295,20 +297,20 @@ function UpdateModal({
       <View style={{ flex: 1, backgroundColor: '#f3f4f6' }}>
         <View style={[detailStyles.header, { flexDirection: 'column', alignItems: 'flex-start', gap: 8 }]}>
           <TouchableOpacity onPress={onCancel} style={detailStyles.closeBtn}>
-            <Text style={detailStyles.closeText}>Odustani</Text>
+            <Text style={detailStyles.closeText}>{t('train_cancel_update')}</Text>
           </TouchableOpacity>
-          <Text style={[detailStyles.title, { marginRight: 0 }]}>Ažuriraj trening</Text>
-          <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>Sprema se samo jednom dnevno — ažurira postojeći zapis</Text>
+          <Text style={[detailStyles.title, { marginRight: 0 }]}>{t('train_update_title')}</Text>
+          <Text style={{ fontSize: 13, color: 'rgba(255,255,255,0.6)' }}>{t('train_update_sub')}</Text>
         </View>
 
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48 }}>
-          {logs.map(ex => (
-            <View key={ex.exercise_id} style={[styles.exerciseCard, { marginHorizontal: 0 }]}>
+          {logs.map((ex, exIdx) => (
+            <View key={`${ex.exercise_id ?? 'ex'}-${exIdx}`} style={[styles.exerciseCard, { marginHorizontal: 0 }]}>
               <Text style={styles.exerciseCardName}>{ex.name}</Text>
               <View style={[styles.setsHeader, { marginTop: 10 }]}>
                 <Text style={[styles.setsCol, { flex: 0.5 }]}>#</Text>
-                <Text style={[styles.setsCol, { flex: 1 }]}>Kg</Text>
-                <Text style={[styles.setsCol, { flex: 1 }]}>Reps</Text>
+                <Text style={[styles.setsCol, { flex: 1 }]}>{t('train_kg')}</Text>
+                <Text style={[styles.setsCol, { flex: 1 }]}>{t('train_reps')}</Text>
               </View>
               {ex.sets.map((set, i) => (
                 <View key={i} style={[styles.setRow, { marginBottom: 6 }]}>
@@ -333,7 +335,7 @@ function UpdateModal({
 
         <View style={styles.saveBar}>
           <TouchableOpacity style={[styles.saveBtn, { backgroundColor: '#f59e0b' }]} onPress={() => onConfirm(logs)}>
-            <Text style={styles.saveBtnText}>Spremi ažurirane vrijednosti</Text>
+            <Text style={styles.saveBtnText}>{t('train_save_updated')}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -343,6 +345,9 @@ function UpdateModal({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function TrainingScreen() {
+  const router = useRouter()
+  const navigation = useNavigation()
+  const { t } = useLanguage()
   const [plan, setPlan] = useState<WorkoutPlan | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeDay, setActiveDay] = useState<PlanDay | null>(null)
@@ -364,6 +369,20 @@ export default function TrainingScreen() {
   const [existingLogId, setExistingLogId] = useState<string | null>(null)
 
   useEffect(() => { fetchPlan() }, [])
+
+  // Tap on the training tab when already on it → go back to plan overview
+  useEffect(() => {
+    const unsub = (navigation as any).addListener('tabPress', () => {
+      if (activeDay) {
+        setActiveDay(null)
+        setExerciseLogs([])
+        setSaved(false)
+        setShowFinish(false)
+        setExistingLogId(null)
+      }
+    })
+    return unsub
+  }, [navigation, activeDay])
 
   const fetchPlan = async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -541,9 +560,9 @@ export default function TrainingScreen() {
 
   if (!plan) return (
     <View style={styles.emptyContainer}>
-      <Text style={styles.emptyEmoji}>🏋️</Text>
-      <Text style={styles.emptyTitle}>Nema aktivnog plana</Text>
-      <Text style={styles.emptySub}>Tvoj trener još nije dodijelio plan treninga.</Text>
+      <Text style={{ fontSize: 28, marginBottom: 10 }}>🏋️</Text>
+      <Text style={styles.emptyTitle}>{t('train_empty_title')}</Text>
+      <Text style={styles.emptySub}>{t('train_empty_sub')}</Text>
     </View>
   )
 
@@ -559,7 +578,7 @@ export default function TrainingScreen() {
           <TouchableOpacity onPress={() => setActiveDay(null)} style={styles.backBtn}>
             <View style={styles.backBtnInner}>
               <Text style={styles.backBtnArrow}>‹</Text>
-              <Text style={styles.backBtnText}>Natrag</Text>
+              <Text style={styles.backBtnText}>{t('back')}</Text>
             </View>
           </TouchableOpacity>
           <Text style={styles.sessionTitle}>{activeDay.name}</Text>
@@ -580,7 +599,7 @@ export default function TrainingScreen() {
             const last = lastLogs[ex.exercise_id]
 
             return (
-              <View key={ex.exercise_id} style={styles.exerciseCard}>
+              <View key={`${ex.exercise_id ?? 'ex'}-${exIndex}`} style={styles.exerciseCard}>
                 {/* Header — tap for detail */}
                 <TouchableOpacity
                   style={styles.exerciseCardHeader}
@@ -603,7 +622,7 @@ export default function TrainingScreen() {
                 {last ? (
                   <View style={styles.lastLogRow}>
                     <Text style={styles.lastLogLabel}>
-                      Prošli put ({new Date(last.date).toLocaleDateString('hr', { day: '2-digit', month: 'short' })}):
+                      {t('train_prev_last')} ({new Date(last.date).toLocaleDateString('hr', { day: '2-digit', month: 'short' })}):
                     </Text>
                     <Text style={styles.lastLogValue}>
                       {last.sets.map(s => `${s.weight || '?'}kg × ${s.reps || '?'}`).join('  |  ')}
@@ -611,14 +630,14 @@ export default function TrainingScreen() {
                   </View>
                 ) : (
                   <View style={styles.lastLogRow}>
-                    <Text style={styles.lastLogLabel}>Prošli put: prvi trening 🎉</Text>
+                    <Text style={styles.lastLogLabel}>{t('train_prev_first')}</Text>
                   </View>
                 )}
 
                 <View style={styles.setsHeader}>
                   <Text style={[styles.setsCol, { flex: 0.5 }]}>#</Text>
-                  <Text style={[styles.setsCol, { flex: 1 }]}>Kg</Text>
-                  <Text style={[styles.setsCol, { flex: 1 }]}>Reps</Text>
+                  <Text style={[styles.setsCol, { flex: 1 }]}>{t('train_kg')}</Text>
+                  <Text style={[styles.setsCol, { flex: 1 }]}>{t('train_reps')}</Text>
                   <Text style={[styles.setsCol, { flex: 0.7 }]}>✓</Text>
                 </View>
 
@@ -654,7 +673,7 @@ export default function TrainingScreen() {
                   </View>
                 ))}
 
-                {ex.notes ? <Text style={styles.exerciseNote}>📝 {ex.notes}</Text> : null}
+                {ex.notes ? <Text style={styles.exerciseNote}>{ex.notes}</Text> : null}
               </View>
             )
           })}
@@ -672,9 +691,9 @@ export default function TrainingScreen() {
         <View style={styles.saveBar}>
           {saved ? (
             <View style={styles.savedBar}>
-              <Text style={styles.savedText}>✓ Trening spremljen!</Text>
+              <Text style={styles.savedText}>{t('train_saved')}</Text>
               <TouchableOpacity onPress={() => setShowUpdate(true)} style={styles.updateBtn}>
-                <Text style={styles.updateBtnText}>Ažuriraj vrijednosti</Text>
+                <Text style={styles.updateBtnText}>{t('train_update_values')}</Text>
               </TouchableOpacity>
             </View>
           ) : (
@@ -684,7 +703,7 @@ export default function TrainingScreen() {
               disabled={saving}
             >
               <Text style={styles.saveBtnText}>
-                {saving ? 'Sprema...' : 'Završi trening 💪'}
+                {saving ? t('train_saving') : t('train_finish')}
               </Text>
             </TouchableOpacity>
           )}
@@ -722,12 +741,21 @@ export default function TrainingScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
       <View style={styles.headerBg}>
-        <Text style={styles.headerLabel}>Aktivni plan</Text>
+        <View style={styles.headerTopRow}>
+          <Text style={styles.headerLabel}>{t('train_active_plan')}</Text>
+          <TouchableOpacity
+            onPress={() => router.push('/workout-history')}
+            style={styles.historyBtn}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.historyBtnText}>{t('train_history')}</Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.headerTitle}>{plan.name}</Text>
         {plan.description && <Text style={styles.headerDesc}>{plan.description}</Text>}
         <View style={styles.weekProgress}>
           <View style={styles.weekProgressHeader}>
-            <Text style={styles.weekProgressLabel}>Ovaj tjedan</Text>
+            <Text style={styles.weekProgressLabel}>{t('train_this_week')}</Text>
             <Text style={styles.weekProgressCount}>{completedThisWeek.length} / {plan.days.length}</Text>
           </View>
           <View style={styles.weekProgressBar}>
@@ -739,9 +767,9 @@ export default function TrainingScreen() {
       {!allDone && nextDay && (
         <TouchableOpacity style={styles.nextDayBanner} onPress={() => openDay(nextDay)} activeOpacity={0.85}>
           <View>
-            <Text style={styles.nextDayLabel}>Sljedeći trening</Text>
+            <Text style={styles.nextDayLabel}>{t('train_next')}</Text>
             <Text style={styles.nextDayName}>{nextDay.name}</Text>
-            <Text style={styles.nextDayMeta}>{nextDay.exercises.length} vježbi</Text>
+            <Text style={styles.nextDayMeta}>{nextDay.exercises.length} {t('train_exercises')}</Text>
           </View>
           <Text style={styles.nextDayArrow}>▶</Text>
         </TouchableOpacity>
@@ -749,27 +777,29 @@ export default function TrainingScreen() {
 
       {allDone && (
         <View style={styles.allDoneBanner}>
-          <Text style={styles.allDoneEmoji}>🏆</Text>
-          <Text style={styles.allDoneTitle}>Tjedan završen!</Text>
-          <Text style={styles.allDoneSub}>Resetira se u ponedjeljak</Text>
+          <Text style={styles.allDoneIcon}>🏆</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.allDoneTitle}>{t('train_done_week')}</Text>
+            <Text style={styles.allDoneSub}>{t('train_done_reset')}</Text>
+          </View>
         </View>
       )}
 
       {plan.notes && (
         <View style={styles.notesCard}>
-          <Text style={styles.notesLabel}>📝 Napomena trenera</Text>
+          <Text style={styles.notesLabel}>{t('trainer_note')}</Text>
           <Text style={styles.notesText}>{plan.notes}</Text>
         </View>
       )}
 
-      <Text style={styles.sectionTitle}>Svi treninzi</Text>
+      <Text style={styles.sectionTitle}>{t('train_all')}</Text>
 
-      {plan.days.map((day) => {
+      {plan.days.map((day, dayIdx) => {
         const isDone = completedThisWeek.includes(day.name)
         const isNext = nextDay?.name === day.name
         return (
           <TouchableOpacity
-            key={day.day_number}
+            key={`day-idx-${dayIdx}`}
             style={[styles.dayCard, isDone && styles.dayCardDone, isNext && styles.dayCardNext]}
             onPress={() => openDay(day)}
             activeOpacity={0.85}
@@ -779,8 +809,8 @@ export default function TrainingScreen() {
               <View>
                 <Text style={[styles.dayName, isDone && styles.dayNameDone]}>{day.name}</Text>
                 <Text style={styles.dayMeta}>
-                  {day.exercises.length} vježbi
-                  {isDone ? ' · ✓ Odrađeno ovaj tjedan' : isNext ? ' · Sljedeći na redu' : ''}
+                  {day.exercises.length} {t('train_exercises')}
+                  {isDone ? t('train_done_week_label') : isNext ? t('train_next_label') : ''}
                 </Text>
               </View>
             </View>
@@ -797,14 +827,22 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 32 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
-  emptyEmoji: { fontSize: 56, marginBottom: 16 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
   headerBg: {
     backgroundColor: '#1e3a5f', paddingTop: 60, paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,
   },
-  headerLabel: { fontSize: 12, color: '#93c5fd', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
+  headerTopRow: {
+    flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'space-between', marginBottom: 6,
+  },
+  historyBtn: {
+    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  historyBtnText: { fontSize: 12, color: 'white', fontWeight: '600' },
+  headerLabel: { fontSize: 12, color: '#93c5fd', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
   headerTitle: { fontSize: 26, fontWeight: '800', color: 'white', marginBottom: 4 },
   headerDesc: { fontSize: 14, color: '#93c5fd', marginBottom: 16 },
   weekProgress: { marginTop: 8 },
@@ -823,11 +861,12 @@ const styles = StyleSheet.create({
   nextDayArrow: { fontSize: 22, color: 'white' },
   allDoneBanner: {
     backgroundColor: '#f0fdf4', borderRadius: 16, marginHorizontal: 20, marginBottom: 12,
-    padding: 20, alignItems: 'center', borderWidth: 1, borderColor: '#86efac',
+    padding: 18, borderWidth: 1, borderColor: '#86efac',
+    flexDirection: 'row', alignItems: 'center', gap: 12,
   },
-  allDoneEmoji: { fontSize: 36, marginBottom: 8 },
-  allDoneTitle: { fontSize: 18, fontWeight: '800', color: '#15803d', marginBottom: 4 },
-  allDoneSub: { fontSize: 13, color: '#4ade80' },
+  allDoneIcon: { fontSize: 22 },
+  allDoneTitle: { fontSize: 15, fontWeight: '700', color: '#15803d' },
+  allDoneSub: { fontSize: 13, color: '#86efac', marginTop: 2 },
   notesCard: {
     backgroundColor: '#fffbeb', borderRadius: 14, padding: 14,
     marginHorizontal: 20, marginBottom: 16, borderLeftWidth: 3, borderLeftColor: '#f59e0b',

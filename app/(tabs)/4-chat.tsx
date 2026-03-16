@@ -1,7 +1,8 @@
 import { supabase } from '@/lib/supabase'
+import { useLanguage } from '@/lib/LanguageContext'
 import { useEffect, useRef, useState } from 'react'
 import {
-  ActivityIndicator, Image, KeyboardAvoidingView, Linking, Modal,
+  ActivityIndicator, Image, Keyboard, Linking, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native'
 
@@ -31,6 +32,7 @@ const EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏']
 
 // ── Trainer Profile Modal ─────────────────────────────────────────────────────
 function TrainerProfileModal({ trainer, onClose }: { trainer: TrainerProfile; onClose: () => void }) {
+  const { t } = useLanguage()
   const initials = trainer.full_name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
 
   const openLink = (url: string) => {
@@ -56,7 +58,7 @@ function TrainerProfileModal({ trainer, onClose }: { trainer: TrainerProfile; on
         {/* Header */}
         <View style={profileStyles.header}>
           <TouchableOpacity onPress={onClose} style={profileStyles.closeBtn}>
-            <Text style={profileStyles.closeText}>Zatvori</Text>
+            <Text style={profileStyles.closeText}>{t('chat_close')}</Text>
           </TouchableOpacity>
         </View>
 
@@ -71,39 +73,39 @@ function TrainerProfileModal({ trainer, onClose }: { trainer: TrainerProfile; on
               </View>
             )}
             <Text style={profileStyles.heroName}>{trainer.full_name}</Text>
-            <Text style={profileStyles.heroRole}>Osobni trener</Text>
+            <Text style={profileStyles.heroRole}>{t('chat_trainer')}</Text>
           </View>
 
           {/* Bio */}
           {trainer.bio ? (
             <View style={profileStyles.section}>
-              <Text style={profileStyles.sectionLabel}>O meni</Text>
+              <Text style={profileStyles.sectionLabel}>{t('chat_bio')}</Text>
               <Text style={profileStyles.bioText}>{trainer.bio}</Text>
             </View>
           ) : null}
 
           {/* Contact buttons */}
           <View style={profileStyles.section}>
-            <Text style={profileStyles.sectionLabel}>Kontakt</Text>
+            <Text style={profileStyles.sectionLabel}>{t('chat_contact')}</Text>
             <View style={profileStyles.contactGrid}>
               {trainer.phone ? (
                 <TouchableOpacity style={profileStyles.contactBtn} onPress={openPhone}>
                   <Text style={profileStyles.contactIcon}>📞</Text>
-                  <Text style={profileStyles.contactLabel}>Nazovi</Text>
+                  <Text style={profileStyles.contactLabel}>{t('chat_call')}</Text>
                   <Text style={profileStyles.contactValue}>{trainer.phone}</Text>
                 </TouchableOpacity>
               ) : null}
               {trainer.email ? (
                 <TouchableOpacity style={profileStyles.contactBtn} onPress={openEmail}>
                   <Text style={profileStyles.contactIcon}>✉️</Text>
-                  <Text style={profileStyles.contactLabel}>Email</Text>
+                  <Text style={profileStyles.contactLabel}>{t('chat_email')}</Text>
                   <Text style={profileStyles.contactValue} numberOfLines={1}>{trainer.email}</Text>
                 </TouchableOpacity>
               ) : null}
               {trainer.instagram ? (
                 <TouchableOpacity style={[profileStyles.contactBtn, profileStyles.contactBtnIG]} onPress={openInstagram}>
                   <Text style={profileStyles.contactIcon}>📸</Text>
-                  <Text style={profileStyles.contactLabel}>Instagram</Text>
+                  <Text style={profileStyles.contactLabel}>{t('chat_instagram')}</Text>
                   <Text style={profileStyles.contactValue} numberOfLines={1}>
                     {trainer.instagram.startsWith('@') ? trainer.instagram : `@${trainer.instagram}`}
                   </Text>
@@ -112,7 +114,7 @@ function TrainerProfileModal({ trainer, onClose }: { trainer: TrainerProfile; on
               {trainer.website ? (
                 <TouchableOpacity style={profileStyles.contactBtn} onPress={() => openLink(trainer.website!)}>
                   <Text style={profileStyles.contactIcon}>🌐</Text>
-                  <Text style={profileStyles.contactLabel}>Web</Text>
+                  <Text style={profileStyles.contactLabel}>{t('chat_website')}</Text>
                   <Text style={profileStyles.contactValue} numberOfLines={1}>{trainer.website}</Text>
                 </TouchableOpacity>
               ) : null}
@@ -151,6 +153,7 @@ const profileStyles = StyleSheet.create({
 
 // ── Main Chat Screen ──────────────────────────────────────────────────────────
 export default function ChatScreen() {
+  const { t } = useLanguage()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(true)
@@ -162,9 +165,27 @@ export default function ChatScreen() {
   const [userId, setUserId] = useState<string | null>(null)
   const [trainerProfile, setTrainerProfile] = useState<TrainerProfile | null>(null)
   const [showProfile, setShowProfile] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const scrollRef = useRef<ScrollView>(null)
+  const PAGE = 50
+
+  const [kbOffset, setKbOffset] = useState(0)
 
   useEffect(() => { initChat() }, [])
+
+  // Manual keyboard height tracking — more reliable than KeyboardAvoidingView inside tabs
+  useEffect(() => {
+    const TAB_H = Platform.OS === 'ios' ? 88 : 0
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide'
+    const show = Keyboard.addListener(showEvt, e => {
+      setKbOffset(Math.max(0, e.endCoordinates.height - TAB_H))
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80)
+    })
+    const hide = Keyboard.addListener(hideEvt, () => setKbOffset(0))
+    return () => { show.remove(); hide.remove() }
+  }, [])
 
   const initChat = async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -190,13 +211,36 @@ export default function ChatScreen() {
   }
 
   const fetchMessages = async (cId: string, tId: string, uid: string) => {
+    // Load newest PAGE messages (descending), then reverse for display
     const { data } = await supabase
-      .from('messages').select('*').eq('client_id', cId).eq('trainer_id', tId)
-      .order('created_at', { ascending: true })
-    if (data) setMessages(data)
+      .from('messages').select('*')
+      .eq('client_id', cId).eq('trainer_id', tId)
+      .order('created_at', { ascending: false })
+      .limit(PAGE)
+    if (data) {
+      setMessages(data.reverse())
+      setHasMore(data.length === PAGE)
+    }
     await supabase.from('messages').update({ read: true })
       .eq('client_id', cId).eq('trainer_id', tId).neq('sender_id', uid).eq('read', false)
     setLoading(false)
+  }
+
+  const loadOlderMessages = async () => {
+    if (!clientId || !trainerId || !messages.length || loadingOlder) return
+    setLoadingOlder(true)
+    const oldest = messages[0].created_at
+    const { data } = await supabase
+      .from('messages').select('*')
+      .eq('client_id', clientId).eq('trainer_id', trainerId)
+      .order('created_at', { ascending: false })
+      .lt('created_at', oldest)
+      .limit(PAGE)
+    if (data) {
+      setMessages(prev => [...data.reverse(), ...prev])
+      setHasMore(data.length === PAGE)
+    }
+    setLoadingOlder(false)
   }
 
   const subscribeToMessages = (cId: string, tId: string, uid: string) => {
@@ -217,14 +261,28 @@ export default function ChatScreen() {
 
   const sendMessage = async () => {
     if (!input.trim() || !userId || !clientId || !trainerId || sending) return
-    setSending(true)
     const content = input.trim()
     setInput('')
-    await supabase.from('messages').insert({
-      trainer_id: trainerId, client_id: clientId, sender_id: userId, content, read: false,
-    })
+    setSending(true)
+
+    // Optimistic update — message appears instantly
+    const tempId = `temp-${Date.now()}`
+    const tempMsg: Message = {
+      id: tempId, content, sender_id: userId,
+      trainer_id: trainerId, client_id: clientId,
+      created_at: new Date().toISOString(), read: false, reaction: null,
+    }
+    setMessages(prev => [...prev, tempMsg])
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50)
+
+    const { data: saved } = await supabase
+      .from('messages')
+      .insert({ trainer_id: trainerId, client_id: clientId, sender_id: userId, content, read: false })
+      .select().single()
+
+    // Replace temp message with real record from DB
+    if (saved) setMessages(prev => prev.map(m => m.id === tempId ? saved : m))
     setSending(false)
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100)
   }
 
   const addReaction = async (msgId: string, emoji: string) => {
@@ -238,13 +296,13 @@ export default function ChatScreen() {
   const formatTime = (t: string) =>
     new Date(t).toLocaleTimeString('hr', { hour: '2-digit', minute: '2-digit' })
 
-  const formatDate = (t: string) => {
-    const d = new Date(t)
+  const formatDate = (ts: string) => {
+    const d = new Date(ts)
     const today = new Date()
     const yesterday = new Date(today)
     yesterday.setDate(today.getDate() - 1)
-    if (d.toDateString() === today.toDateString()) return 'Danas'
-    if (d.toDateString() === yesterday.toDateString()) return 'Jučer'
+    if (d.toDateString() === today.toDateString()) return t('chat_today')
+    if (d.toDateString() === yesterday.toDateString()) return t('chat_yesterday')
     return d.toLocaleDateString('hr', { day: '2-digit', month: 'long' })
   }
 
@@ -275,17 +333,13 @@ export default function ChatScreen() {
   )
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={90}
-    >
+    <View style={[styles.container, { paddingBottom: kbOffset }]}>
       {/* Header — tap opens profile */}
       <TouchableOpacity style={styles.header} onPress={() => setShowProfile(true)} activeOpacity={0.85}>
         <TrainerAvatar size={40} />
         <View style={{ flex: 1 }}>
           <Text style={styles.headerName}>{trainerName}</Text>
-          <Text style={styles.headerSub}>Tvoj trener · Tap za profil</Text>
+          <Text style={styles.headerSub}>{t('chat_header_sub')}</Text>
         </View>
         <Text style={styles.headerChevron}>›</Text>
       </TouchableOpacity>
@@ -298,6 +352,21 @@ export default function ChatScreen() {
         onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
         showsVerticalScrollIndicator={false}
       >
+        {/* Load older messages */}
+        {hasMore && (
+          <TouchableOpacity
+            onPress={loadOlderMessages}
+            disabled={loadingOlder}
+            style={styles.loadOlderBtn}
+            activeOpacity={0.75}
+          >
+            {loadingOlder
+              ? <ActivityIndicator size="small" color="#6b7280" />
+              : <Text style={styles.loadOlderText}>{t('chat_older')}</Text>
+            }
+          </TouchableOpacity>
+        )}
+
         {messages.length === 0 && (
           <View style={styles.emptyChat}>
             <TouchableOpacity onPress={() => setShowProfile(true)} activeOpacity={0.85}>
@@ -403,7 +472,7 @@ export default function ChatScreen() {
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder="Napiši poruku..."
+          placeholder={t('chat_input')}
           placeholderTextColor="#9ca3af"
           multiline
           maxLength={1000}
@@ -421,7 +490,7 @@ export default function ChatScreen() {
       {showProfile && trainerProfile && (
         <TrainerProfileModal trainer={trainerProfile} onClose={() => setShowProfile(false)} />
       )}
-    </KeyboardAvoidingView>
+    </View>
   )
 }
 
@@ -439,6 +508,12 @@ const styles = StyleSheet.create({
   headerChevron: { fontSize: 24, color: 'rgba(255,255,255,0.4)', fontWeight: '300' },
   messageList: { flex: 1 },
   messageContent: { padding: 16, paddingBottom: 8 },
+  loadOlderBtn: {
+    alignSelf: 'center', marginBottom: 16, marginTop: 4,
+    backgroundColor: '#f3f4f6', borderRadius: 99,
+    paddingHorizontal: 16, paddingVertical: 8, minWidth: 180, alignItems: 'center',
+  },
+  loadOlderText: { fontSize: 13, color: '#6b7280', fontWeight: '600' },
   emptyChat: { alignItems: 'center', marginTop: 60, marginBottom: 40 },
   emptyChatName: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
   emptyChatSub: { fontSize: 13, color: '#9ca3af' },

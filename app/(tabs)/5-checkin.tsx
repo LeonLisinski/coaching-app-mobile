@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase'
+import { useLanguage } from '@/lib/LanguageContext'
 import * as ImagePicker from 'expo-image-picker'
+import { useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal,
@@ -15,7 +17,7 @@ type CheckinValues = Record<string, any>
 type ExistingCheckin = { id: string; values: CheckinValues; photo_urls: any[] | null; trainer_comment: string | null }
 type DailyLog = { id: string; values: CheckinValues }
 
-const DAYS = ['Nedjelja', 'Ponedjeljak', 'Utorak', 'Srijeda', 'Četvrtak', 'Petak', 'Subota']
+// DAYS is now derived from i18n inside components
 
 const shouldSendPhotos = (frequency: string | null, lastCheckinDate: string | null): boolean => {
   if (!frequency) return false
@@ -34,23 +36,21 @@ const shouldSendPhotos = (frequency: string | null, lastCheckinDate: string | nu
 
 // ── Confirm modal ─────────────────────────────────────────────────────────────
 function ConfirmCheckinModal({ onConfirm, onCancel, isUpdate }: { onConfirm: () => void; onCancel: () => void; isUpdate: boolean }) {
+  const { t } = useLanguage()
   return (
     <Modal visible animationType="fade" transparent onRequestClose={onCancel}>
       <View style={confirmStyles.overlay}>
         <View style={confirmStyles.card}>
-          <Text style={confirmStyles.emoji}>{isUpdate ? '🔄' : '✅'}</Text>
-          <Text style={confirmStyles.title}>{isUpdate ? 'Ažurirati check-in?' : 'Poslati check-in?'}</Text>
+          <Text style={confirmStyles.title}>{isUpdate ? t('ci_update_confirm') : t('ci_checkin_confirm')}</Text>
           <Text style={confirmStyles.sub}>
-            {isUpdate
-              ? 'Ažurirat ćeš postojeći check-in za ovaj tjedan.'
-              : 'Check-in šalješ jednom tjedno. Trener će pregledati tvoj napredak.'}
+            {isUpdate ? t('ci_update_confirm_msg') : t('ci_checkin_confirm_msg')}
           </Text>
           <View style={confirmStyles.btns}>
             <TouchableOpacity onPress={onCancel} style={confirmStyles.cancelBtn}>
-              <Text style={confirmStyles.cancelText}>Odustani</Text>
+              <Text style={confirmStyles.cancelText}>{t('cancel')}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={onConfirm} style={confirmStyles.confirmBtn}>
-              <Text style={confirmStyles.confirmText}>{isUpdate ? 'Ažuriraj' : 'Pošalji'}</Text>
+              <Text style={confirmStyles.confirmText}>{isUpdate ? t('update') : t('send')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -62,7 +62,6 @@ function ConfirmCheckinModal({ onConfirm, onCancel, isUpdate }: { onConfirm: () 
 const confirmStyles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 32 },
   card: { backgroundColor: 'white', borderRadius: 24, padding: 28, width: '100%', alignItems: 'center' },
-  emoji: { fontSize: 44, marginBottom: 12 },
   title: { fontSize: 20, fontWeight: '800', color: '#111827', marginBottom: 8, textAlign: 'center' },
   sub: { fontSize: 14, color: '#6b7280', textAlign: 'center', lineHeight: 20, marginBottom: 24 },
   btns: { flexDirection: 'row', gap: 10, width: '100%' },
@@ -73,6 +72,9 @@ const confirmStyles = StyleSheet.create({
 })
 
 export default function CheckinScreen() {
+  const router = useRouter()
+  const { t } = useLanguage()
+  const DAYS = t('days_long').split(',')
   const [dailyParams, setDailyParams] = useState<Parameter[]>([])
   const [weeklyParams, setWeeklyParams] = useState<Parameter[]>([])
   const [config, setConfig] = useState<CheckinConfig | null>(null)
@@ -113,7 +115,19 @@ export default function CheckinScreen() {
     }
     if (configData) setConfig(configData)
     if (todayCheckin) { setExistingCheckin(todayCheckin); setCheckinValues(todayCheckin.values || {}); setCheckinSubmitted(true) }
-    if (todayDaily) { setExistingDailyLog(todayDaily); setDailyValues(todayDaily.values || {}); setDailySubmitted(true) }
+    if (todayDaily) {
+      setExistingDailyLog(todayDaily)
+      setDailyValues(todayDaily.values || {})
+      // Only mark as submitted if at least one daily parameter has an actual value
+      // (daily_logs record can exist just from the is_training_day toggle on Home screen)
+      const dailyParamIds = paramsData
+        ?.filter((p: Parameter) => p.frequency === 'daily')
+        .map((p: Parameter) => p.id) ?? []
+      const hasActualValues = dailyParamIds.some(
+        (id: string) => todayDaily.values?.[id] != null && todayDaily.values[id] !== '',
+      )
+      setDailySubmitted(hasActualValues)
+    }
     const prevCheckin = lastCheckin?.find((c: any) => c.date !== today)
     setLastCheckinDate(prevCheckin?.date || null)
     setLoading(false)
@@ -124,14 +138,14 @@ export default function CheckinScreen() {
 
   const pickPhoto = async (position: string) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Greška', 'Potrebno je dopuštenje za pristup fotografijama.'); return }
+    if (status !== 'granted') { Alert.alert(t('error'), t('ci_err_permission_photos')); return }
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, quality: 0.8 })
     if (!result.canceled && result.assets[0]) setPhotos(p => ({ ...p, [position]: result.assets[0].uri }))
   }
 
   const takePhoto = async (position: string) => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
-    if (status !== 'granted') { Alert.alert('Greška', 'Potrebno je dopuštenje za kameru.'); return }
+    if (status !== 'granted') { Alert.alert(t('error'), t('ci_err_permission_cam')); return }
     const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 })
     if (!result.canceled && result.assets[0]) setPhotos(p => ({ ...p, [position]: result.assets[0].uri }))
   }
@@ -151,7 +165,7 @@ export default function CheckinScreen() {
   const handleSaveDaily = async () => {
     if (!clientId || !trainerId) return
     const missing = dailyParams.filter(p => p.required && !dailyValues[p.id] && dailyValues[p.id] !== 0)
-    if (missing.length > 0) { Alert.alert('Greška', `Popuni obavezna polja: ${missing.map(p => p.name).join(', ')}`); return }
+    if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingDaily(true)
     const today = new Date().toISOString().split('T')[0]
     if (existingDailyLog) {
@@ -166,7 +180,7 @@ export default function CheckinScreen() {
   const handleSubmitCheckin = async () => {
     if (!clientId || !trainerId) return
     const missing = weeklyParams.filter(p => p.required && !checkinValues[p.id] && checkinValues[p.id] !== 0)
-    if (missing.length > 0) { Alert.alert('Greška', `Popuni obavezna polja: ${missing.map(p => p.name).join(', ')}`); return }
+    if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingCheckin(true)
     const today = new Date().toISOString().split('T')[0]
     let uploadedUrls: Record<string, string> = {}
@@ -182,7 +196,7 @@ export default function CheckinScreen() {
       await supabase.from('checkins').insert(payload)
     }
     setSavingCheckin(false); setCheckinSubmitted(true); setShowConfirm(false)
-    Alert.alert('✓ Check-in poslan!', 'Trener će pregledati tvoj napredak.')
+    Alert.alert(t('ci_sent_alert'), t('ci_sent_alert_msg'))
   }
 
   // ── Render one parameter ──────────────────────────────────────────────────
@@ -295,13 +309,22 @@ export default function CheckinScreen() {
 
         {/* Header */}
         <View style={styles.headerBg}>
-          <Text style={styles.headerLabel}>Check-in</Text>
+          <View style={styles.headerTopRow}>
+            <Text style={styles.headerLabel}>Check-in</Text>
+            <TouchableOpacity
+              onPress={() => router.push('/checkin-history')}
+              style={styles.historyBtn}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.historyBtnText}>{t('ci_progress')}</Text>
+            </TouchableOpacity>
+          </View>
           <Text style={styles.headerTitle}>
             {new Date().toLocaleDateString('hr', { weekday: 'long', day: '2-digit', month: 'long' })}
           </Text>
           {config && (
             <Text style={styles.headerMeta}>
-              📅 Tjedni check-in: {config.checkin_day !== null ? DAYS[config.checkin_day] : 'Nije postavljen'}
+              {t('ci_weekly_title')}: {config.checkin_day !== null ? DAYS[config.checkin_day] : t('none')}
             </Text>
           )}
         </View>
@@ -311,8 +334,8 @@ export default function CheckinScreen() {
           <View style={styles.block}>
             <View style={styles.blockHeader}>
               <View style={[styles.blockDot, { backgroundColor: '#f59e0b' }]} />
-              <Text style={styles.blockTitle}>Dnevni unos</Text>
-              {dailySubmitted && <View style={styles.pill}><Text style={styles.pillText}>✓ Uneseno danas</Text></View>}
+              <Text style={styles.blockTitle}>{t('ci_daily_title')}</Text>
+              {dailySubmitted && <View style={styles.pill}><Text style={styles.pillText}>{t('ci_done_today')}</Text></View>}
             </View>
 
             <View style={styles.numberList}>
@@ -326,7 +349,7 @@ export default function CheckinScreen() {
               disabled={savingDaily}
             >
               <Text style={styles.btnText}>
-                {savingDaily ? 'Sprema...' : dailySubmitted ? '↺  Ažuriraj dnevni unos' : '✓  Spremi dnevni unos'}
+                {savingDaily ? t('ci_saving') : dailySubmitted ? `↺  ${t('update')}` : `✓  ${t('ci_save')}`}
               </Text>
             </TouchableOpacity>
           </View>
@@ -336,7 +359,7 @@ export default function CheckinScreen() {
         {dailyParams.length > 0 && (weeklyParams.length > 0 || photoPositions.length > 0) && (
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
-            <Text style={styles.dividerLabel}>tjedni check-in</Text>
+            <Text style={styles.dividerLabel}>{t('ci_weekly_title').toLowerCase()}</Text>
             <View style={styles.dividerLine} />
           </View>
         )}
@@ -346,27 +369,27 @@ export default function CheckinScreen() {
           <View style={styles.block}>
             <View style={styles.blockHeader}>
               <View style={[styles.blockDot, { backgroundColor: '#78350f' }]} />
-              <Text style={styles.blockTitle}>Tjedni check-in</Text>
+              <Text style={styles.blockTitle}>{t('ci_weekly_title')}</Text>
               <View style={[styles.pill, isCheckinDay ? styles.pillBlue : styles.pillGray]}>
                 <Text style={[styles.pillText, isCheckinDay && { color: '#1d4ed8' }]}>
-                  {isCheckinDay ? '📅 Danas' : config?.checkin_day !== null ? DAYS[config!.checkin_day!] : ''}
+                  {isCheckinDay ? t('today') : config?.checkin_day !== null ? DAYS[config!.checkin_day!] : ''}
                 </Text>
               </View>
             </View>
 
             {existingCheckin?.trainer_comment && (
               <View style={styles.commentCard}>
-                <Text style={styles.commentLabel}>💬 Komentar trenera</Text>
+                <Text style={styles.commentLabel}>{t('ci_trainer_comment')}</Text>
                 <Text style={styles.commentText}>{existingCheckin.trainer_comment}</Text>
               </View>
             )}
 
             {checkinSubmitted && (
               <View style={styles.submittedRow}>
-                <Text style={styles.submittedEmoji}>✅</Text>
+                <View style={styles.submittedCheck}><Text style={styles.submittedCheckText}>✓</Text></View>
                 <View>
-                  <Text style={styles.submittedTitle}>Check-in poslan!</Text>
-                  <Text style={styles.submittedSub}>Možeš ažurirati do kraja dana</Text>
+                  <Text style={styles.submittedTitle}>{t('ci_send_btn').replace('✓  ', '')}</Text>
+                  <Text style={styles.submittedSub}>{t('ci_checkin_confirm_msg').split('.')[0]}</Text>
                 </View>
               </View>
             )}
@@ -379,7 +402,7 @@ export default function CheckinScreen() {
             {/* Fotografije */}
             {needsPhotos && photoPositions.length > 0 && (
               <View style={styles.photosWrap}>
-                <Text style={styles.photosTitle}>Fotografije</Text>
+                <Text style={styles.photosTitle}>{t('ci_photos_title')}</Text>
                 <View style={styles.photosGrid}>
                   {photoPositions.map(position => {
                     const existingUrl = (existingCheckin?.photo_urls as any[])?.find((p: any) => p.position === position)?.url
@@ -394,7 +417,7 @@ export default function CheckinScreen() {
                             { text: 'Odustani', style: 'cancel' },
                           ])}>
                             <Image source={{ uri: displayUri }} style={styles.photoImg} />
-                            <Text style={styles.photoChangeText}>Promijeni</Text>
+                            <Text style={styles.photoChangeText}>{t('ci_photo_change')}</Text>
                           </TouchableOpacity>
                         ) : (
                           <TouchableOpacity style={styles.photoEmpty} onPress={() => Alert.alert(position, 'Odaberi', [
@@ -402,8 +425,7 @@ export default function CheckinScreen() {
                             { text: 'Kamera', onPress: () => takePhoto(position) },
                             { text: 'Odustani', style: 'cancel' },
                           ])}>
-                            <Text style={{ fontSize: 26, marginBottom: 6 }}>📷</Text>
-                            <Text style={styles.photoEmptyText}>Dodaj foto</Text>
+                            <Text style={styles.photoEmptyText}>{t('ci_photo_add')}</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -419,7 +441,7 @@ export default function CheckinScreen() {
               disabled={savingCheckin}
             >
               <Text style={styles.btnText}>
-                {savingCheckin ? 'Šalje...' : checkinSubmitted ? '↺  Ažuriraj check-in' : '✓  Pošalji check-in'}
+                {savingCheckin ? t('ci_sending') : checkinSubmitted ? t('ci_update_btn') : t('ci_send_btn')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -448,7 +470,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#78350f', paddingTop: 60, paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 8,
   },
-  headerLabel: { fontSize: 12, color: '#fcd34d', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
+  headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  headerLabel: { fontSize: 12, color: '#fcd34d', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
+  historyBtn: {
+    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 99,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  historyBtnText: { fontSize: 12, color: 'white', fontWeight: '600' },
   headerTitle: { fontSize: 22, fontWeight: '800', color: 'white', marginBottom: 8, textTransform: 'capitalize' },
   headerMeta: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
 
@@ -527,7 +555,8 @@ const styles = StyleSheet.create({
   commentLabel: { fontSize: 12, fontWeight: '700', color: '#1d4ed8', marginBottom: 4 },
   commentText: { fontSize: 13, color: '#1e40af', lineHeight: 20 },
   submittedRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#f0fdf4', borderRadius: 14, marginBottom: 10, padding: 14, borderWidth: 1, borderColor: '#86efac' },
-  submittedEmoji: { fontSize: 28 },
+  submittedCheck: { width: 32, height: 32, borderRadius: 99, backgroundColor: '#22c55e', alignItems: 'center', justifyContent: 'center' },
+  submittedCheckText: { color: 'white', fontSize: 16, fontWeight: '700' },
   submittedTitle: { fontSize: 15, fontWeight: '700', color: '#15803d' },
   submittedSub: { fontSize: 12, color: '#4ade80', marginTop: 2 },
 
