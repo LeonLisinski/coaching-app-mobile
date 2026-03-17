@@ -244,25 +244,27 @@ export default function TimelineScreen() {
         </View>
       ) : (
         <View style={{ flex: 1 }}>
-          {/* Filter chips */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterBar}
-          >
-            {FILTERS.map(f => (
-              <TouchableOpacity
-                key={f.key}
-                style={[styles.filterChip, activeFilter === f.key && styles.filterChipActive]}
-                onPress={() => setActiveFilter(f.key)}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.filterChipText, activeFilter === f.key && styles.filterChipTextActive]}>
-                  {f.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
+          {/* Filter chips — fixed height row */}
+          <View style={styles.filterBarWrap}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.filterBar}
+            >
+              {FILTERS.map(f => (
+                <TouchableOpacity
+                  key={f.key}
+                  style={[styles.filterChip, activeFilter === f.key && styles.filterChipActive]}
+                  onPress={() => setActiveFilter(f.key)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.filterChipText, activeFilter === f.key && styles.filterChipTextActive]}>
+                    {f.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
 
           <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
             {groups.map(group => {
@@ -378,8 +380,12 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center', lineHeight: 22 },
 
+  filterBarWrap: {
+    flexShrink: 0, backgroundColor: 'white',
+    borderBottomWidth: 1, borderBottomColor: '#f3f4f6',
+  },
   filterBar: {
-    paddingHorizontal: 16, paddingVertical: 12, gap: 8,
+    paddingHorizontal: 16, paddingVertical: 10, gap: 8, flexDirection: 'row', alignItems: 'center',
   },
   filterChip: {
     paddingHorizontal: 14, paddingVertical: 8,

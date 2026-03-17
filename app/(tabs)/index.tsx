@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
-import { UnitLiftLogo } from '@/lib/UnitLiftLogo'
+import { UnitLiftWordmark } from '@/lib/UnitLiftLogo'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { BarChart2, ClipboardCheck, Dumbbell, Salad } from 'lucide-react-native'
 import { useCallback, useEffect, useState } from 'react'
@@ -268,8 +268,7 @@ export default function HomeScreen() {
         {/* UnitLift branding row */}
         <View style={styles.brandRow}>
           <View style={styles.brandLeft}>
-            <UnitLiftLogo size={28} borderRadius={8} />
-            <Text style={styles.brandName}>UnitLift</Text>
+            <UnitLiftWordmark height={20} color="rgba(255,255,255,0.92)" />
           </View>
           <TouchableOpacity onPress={() => router.push('/settings')} style={styles.settingsBtn} activeOpacity={0.7}>
             <Text style={styles.settingsIcon}>⚙</Text>
@@ -330,29 +329,23 @@ export default function HomeScreen() {
       {/* Treniraš danas? */}
       {(hasTrainingDayPlan || hasTraining) && (
         <View style={styles.trainingDayCard}>
-          <View style={styles.trainingDayLeft}>
-            <View style={[
-              styles.trainingDayIconBox,
-              isTrainingDay === true && styles.trainingDayIconBoxYes,
-              isTrainingDay === false && styles.trainingDayIconBoxNo,
-            ]}>
-              <Dumbbell
-                size={16}
-                color={isTrainingDay === true ? '#3b82f6' : isTrainingDay === false ? '#8b5cf6' : '#9ca3af'}
-                strokeWidth={2}
-              />
+          {/* Top row: icon + title + hint/answer */}
+          <View style={styles.trainingDayTop}>
+            <View style={styles.trainingDayIconBox}>
+              <Dumbbell size={16} color="#3b82f6" strokeWidth={2} />
             </View>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.trainingDayTitle}>{t('home_training_today')}</Text>
               {isTrainingDay !== null ? (
-                <Text style={styles.trainingDayAnswer}>
+                <Text style={styles.trainingDayAnswer} numberOfLines={1}>
                   {isTrainingDay ? t('home_training_day_yes') : t('home_training_day_no')}
                 </Text>
               ) : (
-                <Text style={styles.trainingDayHint}>{t('home_training_hint')}</Text>
+                <Text style={styles.trainingDayHint} numberOfLines={1}>{t('home_training_hint')}</Text>
               )}
             </View>
           </View>
+          {/* Bottom row: buttons */}
           <View style={styles.trainingDayBtns}>
             <TouchableOpacity
               style={[styles.trainingBtn, isTrainingDay === true && styles.trainingBtnActiveYes]}
@@ -576,8 +569,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     marginBottom: 18,
   },
-  brandLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  brandName: { fontSize: 16, fontWeight: '700', color: 'rgba(255,255,255,0.9)', letterSpacing: 0.2 },
+  brandLeft: { flexDirection: 'row', alignItems: 'center' },
   header: { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'flex-start', marginBottom: 22 },
   greeting: { fontSize: 13, color: 'rgba(255,255,255,0.65)', fontWeight: '500', letterSpacing: 0.3 },
   name: { fontSize: 28, fontWeight: '800', color: 'white', marginTop: 3, letterSpacing: -0.5 },
@@ -614,21 +606,23 @@ const styles = StyleSheet.create({
 
   trainingDayCard: {
     backgroundColor: 'white', borderRadius: 16, marginHorizontal: 20, marginBottom: 16,
-    padding: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 14,
     shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 2,
+    gap: 12,
   },
+  trainingDayTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   trainingDayLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
   trainingDayIconBox: {
-    width: 36, height: 36, borderRadius: 10, backgroundColor: '#f3f4f6',
-    alignItems: 'center', justifyContent: 'center',
+    width: 34, height: 34, borderRadius: 10, backgroundColor: '#eff6ff',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
   trainingDayIconBoxYes: { backgroundColor: '#eff6ff' },
   trainingDayIconBoxNo:  { backgroundColor: '#f5f3ff' },
   trainingDayTitle: { fontSize: 14, fontWeight: '700', color: '#111827' },
-  trainingDayAnswer: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  trainingDayAnswer: { fontSize: 12, color: '#3b82f6', marginTop: 2, fontWeight: '500' },
   trainingDayHint: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
   trainingDayBtns: { flexDirection: 'row', gap: 8 },
-  trainingBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 99, borderWidth: 1.5, borderColor: '#e5e7eb' },
+  trainingBtn: { flex: 1, paddingVertical: 9, borderRadius: 12, borderWidth: 1.5, borderColor: '#e5e7eb', alignItems: 'center' },
   trainingBtnActiveYes: { backgroundColor: '#3b82f6', borderColor: '#3b82f6' },
   trainingBtnActiveNo: { backgroundColor: '#8b5cf6', borderColor: '#8b5cf6' },
   trainingBtnText: { fontSize: 13, fontWeight: '700', color: '#6b7280' },

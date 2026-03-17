@@ -33,8 +33,8 @@ type DayGroup = {
   sessions: WorkoutLog[]
 }
 
-function formatDate(dateStr: string): string {
-  return new Date(dateStr).toLocaleDateString('hr', {
+function formatDate(dateStr: string, locale = 'hr'): string {
+  return new Date(dateStr).toLocaleDateString(locale, {
     day: 'numeric', month: 'long', year: 'numeric',
   })
 }
@@ -88,11 +88,11 @@ function buildPrevWeights(sessions: WorkoutLog[], currentIndex: number): Record<
 }
 
 // ── Trend Badge ───────────────────────────────────────────────────────────────
-function TrendBadge({ trend, diff }: { trend: Trend; diff?: number }) {
+function TrendBadge({ trend, diff, t }: { trend: Trend; diff?: number; t: (k: string) => string }) {
   if (trend === 'new') {
     return (
       <View style={trendStyles.newBadge}>
-        <Text style={trendStyles.newText}>Prva sesija</Text>
+        <Text style={trendStyles.newText}>{t('wh_first_session')}</Text>
       </View>
     )
   }
@@ -132,11 +132,13 @@ const trendStyles = StyleSheet.create({
 
 // ── Session Card ──────────────────────────────────────────────────────────────
 function SessionCard({
-  session, prevWeights, sessionNumber,
+  session, prevWeights, sessionNumber, t, locale,
 }: {
   session: WorkoutLog
   prevWeights: Record<string, number>
   sessionNumber: number
+  t: (k: string) => string
+  locale: string
 }) {
   const [expanded, setExpanded] = useState(sessionNumber === 0)
 
@@ -153,9 +155,9 @@ function SessionCard({
         activeOpacity={0.75}
       >
         <View style={sessionStyles.headerLeft}>
-          <Text style={sessionStyles.dateText}>{formatDate(session.date)}</Text>
+          <Text style={sessionStyles.dateText}>{formatDate(session.date, locale)}</Text>
           <Text style={sessionStyles.metaText}>
-            {totalExercises} vježbi  ·  {totalCompleted} serija
+            {totalExercises} {t('wh_exercises')}  ·  {totalCompleted} {t('wh_sets')}
           </Text>
         </View>
         <Text style={sessionStyles.chevron}>{expanded ? '▲' : '▼'}</Text>
@@ -189,7 +191,7 @@ function SessionCard({
                     <Text style={sessionStyles.exerciseSets}>{formatWeightsList(ex.sets)}</Text>
                   </View>
                 </View>
-                <TrendBadge trend={trend} diff={diff} />
+                <TrendBadge trend={trend} diff={diff} t={t} />
               </View>
             )
           })}
@@ -233,10 +235,10 @@ const sessionStyles = StyleSheet.create({
 })
 
 // ── Day Group ─────────────────────────────────────────────────────────────────
-function DayGroupSection({ group }: { group: DayGroup }) {
+function DayGroupSection({ group, t, locale }: { group: DayGroup; t: (k: string) => string; locale: string }) {
   const [collapsed, setCollapsed] = useState(false)
   const latest = group.sessions[0]
-  const latestDate = latest ? formatDate(latest.date) : ''
+  const latestDate = latest ? formatDate(latest.date, locale) : ''
 
   return (
     <View style={groupStyles.container}>
@@ -250,7 +252,7 @@ function DayGroupSection({ group }: { group: DayGroup }) {
           <View>
             <Text style={groupStyles.dayName}>{group.dayName}</Text>
             <Text style={groupStyles.dayMeta}>
-              {group.sessions.length} sesija  ·  zadnji {latestDate}
+              {t('wh_day_meta').replace('{n}', String(group.sessions.length)).replace('{date}', latestDate)}
             </Text>
           </View>
         </View>
@@ -267,6 +269,8 @@ function DayGroupSection({ group }: { group: DayGroup }) {
               session={session}
               prevWeights={buildPrevWeights(group.sessions, index)}
               sessionNumber={index}
+              t={t}
+              locale={locale}
             />
           ))}
         </View>
@@ -337,20 +341,20 @@ function buildPRs(groups: DayGroup[]): PrRecord[] {
   return result.map(r => ({ ...r, isNew: r.date >= thirtyDaysAgo }))
 }
 
-function PRsView({ groups }: { groups: DayGroup[] }) {
+function PRsView({ groups, t, locale }: { groups: DayGroup[]; t: (k: string) => string; locale: string }) {
   const prs = useMemo(() => buildPRs(groups), [groups])
 
   if (prs.length === 0) {
     return (
       <View style={prStyles.empty}>
-        <Text style={prStyles.emptyText}>Nema dovoljno podataka za prikaz rekorda</Text>
+        <Text style={prStyles.emptyText}>{t('wh_pr_empty')}</Text>
       </View>
     )
   }
 
   return (
     <ScrollView contentContainerStyle={prStyles.list} showsVerticalScrollIndicator={false}>
-      <Text style={prStyles.sectionLabel}>OSOBNI REKORDI  ·  {prs.length} vježbi</Text>
+      <Text style={prStyles.sectionLabel}>{t('wh_pr_section').replace('{n}', String(prs.length))}</Text>
       {prs.map((pr, i) => (
         <View key={pr.exerciseId} style={prStyles.row}>
           <View style={prStyles.rankBadge}>
@@ -366,7 +370,7 @@ function PRsView({ groups }: { groups: DayGroup[] }) {
               )}
             </View>
             <Text style={prStyles.exSets}>{pr.sets}</Text>
-            <Text style={prStyles.exDate}>{formatDate(pr.date)}</Text>
+            <Text style={prStyles.exDate}>{formatDate(pr.date, locale)}</Text>
           </View>
           <View style={prStyles.weightBox}>
             <Text style={prStyles.weightNum}>{pr.maxWeight}</Text>
@@ -574,7 +578,7 @@ function VolumeView({ groups }: { groups: DayGroup[] }) {
             {dayPoints.length === 1 && (
               <View style={volStyles.singleSession}>
                 <Text style={volStyles.singleText}>
-                  1 sesija  ·  {Math.round(dayPoints[0].volume)} kg
+                  {t('wh_single_session')}  ·  {Math.round(dayPoints[0].volume)} kg
                 </Text>
               </View>
             )}
@@ -632,7 +636,8 @@ const volStyles = StyleSheet.create({
 type TabMode = 'sessions' | 'prs' | 'volume'
 
 export default function WorkoutHistoryScreen() {
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
+  const locale = lang === 'en' ? 'en' : 'hr'
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [groups, setGroups] = useState<DayGroup[]>([])
@@ -764,16 +769,16 @@ export default function WorkoutHistoryScreen() {
           {tab === 'sessions' && (
             <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
               <Text style={styles.sectionLabel}>
-                GRUPIRANO PO DANU  ·  {totalSessions} SESIJA
+                {t('wh_grouped_by_day').replace('{n}', String(totalSessions))}
               </Text>
               {groups.map(group => (
-                <DayGroupSection key={group.dayName} group={group} />
+                <DayGroupSection key={group.dayName} group={group} t={t} locale={locale} />
               ))}
               <View style={{ height: 40 }} />
             </ScrollView>
           )}
 
-          {tab === 'prs' && <PRsView groups={groups} />}
+          {tab === 'prs' && <PRsView groups={groups} t={t} locale={locale} />}
           {tab === 'volume' && <VolumeView groups={groups} />}
         </>
       )}

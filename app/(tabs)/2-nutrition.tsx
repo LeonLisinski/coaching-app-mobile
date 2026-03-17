@@ -1,7 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { useLanguage } from '@/lib/LanguageContext'
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
   ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
@@ -46,9 +46,11 @@ const getToday = () => {
   return now.toISOString().split('T')[0]
 }
 
+const MACRO_COLORS = ['#f97316', '#3b82f6', '#10b981', '#8b5cf6']
+
 export default function NutritionScreen() {
   const router = useRouter()
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
   const [plan, setPlan] = useState<MealPlan | null>(null)
   const [altPlan, setAltPlan] = useState<MealPlan | null>(null)
   const [planMode, setPlanMode] = useState<'training_day' | 'rest_day' | 'default' | null>(null)
@@ -61,21 +63,65 @@ export default function NutritionScreen() {
   const [expandedMeal, setExpandedMeal] = useState<string | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
   const [trainerId, setTrainerId] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState(getToday())
+  const [loadingLog, setLoadingLog] = useState(false)
+  const [minDate, setMinDate] = useState<string | null>(null)
 
   const today = getToday()
+  const MAX_BACK_DAYS = 3
+
+  // Timezone-safe date offset using UTC math on ISO date strings
+  const offsetDate = (dateStr: string, days: number): string => {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const dt = new Date(Date.UTC(y, m - 1, d + days))
+    return dt.toISOString().split('T')[0]
+  }
+
+  const fmtSelectedDate = (dateStr: string): string => {
+    if (dateStr === today) return t('today')
+    const yesterday = offsetDate(today, -1)
+    if (dateStr === yesterday) return lang === 'hr' ? 'Jučer' : 'Yesterday'
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    return dt.toLocaleDateString(lang === 'hr' ? 'hr' : 'en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+  }
+
+  // Min date: latest of (3 days ago) and (client start date)
+  const hardMin = offsetDate(today, -MAX_BACK_DAYS)
+  const effectiveMin = minDate && minDate > hardMin ? minDate : hardMin
+  const canGoBack = selectedDate > effectiveMin
+  const canGoForward = selectedDate < today
 
   useEffect(() => { fetchData() }, [])
+
+  // When date changes (after initial load), just reload the log
+  useEffect(() => {
+    if (!clientId) return
+    fetchLogForDate(clientId, selectedDate)
+  }, [selectedDate])
+
+  // Re-fetch log whenever screen comes into focus (e.g. returning from history)
+  useFocusEffect(
+    useCallback(() => {
+      if (!clientId) return
+      fetchLogForDate(clientId, selectedDate)
+    }, [clientId, selectedDate]),
+  )
 
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
 
     const { data: clientData } = await supabase
-      .from('clients').select('id, trainer_id').eq('user_id', user.id).single()
+      .from('clients').select('id, trainer_id, created_at').eq('user_id', user.id).single()
     if (!clientData) return setLoading(false)
 
     setClientId(clientData.id)
     setTrainerId(clientData.trainer_id)
+    // Earliest day user can navigate back to
+    if (clientData.created_at) {
+      setMinDate(clientData.created_at.split('T')[0])
+    }
 
     // Read is_training_day from daily_logs (set by home screen answer)
     const { data: dailyLog } = await supabase
@@ -140,10 +186,18 @@ export default function NutritionScreen() {
     }
 
     // Today's nutrition log
+    await fetchLogForDate(clientData.id, selectedDate)
+    setLoading(false)
+  }
+
+  const fetchLogForDate = async (cId: string, date: string) => {
+    setLoadingLog(true)
+    setLog(null)
+    setCompletedMeals([])
+    setMacros({ calories: '', protein: '', carbs: '', fat: '' })
     const { data: logData } = await supabase
       .from('nutrition_logs').select('*')
-      .eq('client_id', clientData.id).eq('date', today).single()
-
+      .eq('client_id', cId).eq('date', date).single()
     if (logData) {
       setLog(logData)
       setCompletedMeals(logData.meals_completed || [])
@@ -154,8 +208,7 @@ export default function NutritionScreen() {
         fat: logData.fat?.toString() || '',
       })
     }
-
-    setLoading(false)
+    setLoadingLog(false)
   }
 
   const loadPlanData = async (assigned: any, cId: string, tId: string): Promise<MealPlan | null> => {
@@ -205,18 +258,42 @@ export default function NutritionScreen() {
   }
 
   const toggleMeal = async (mealId: string) => {
-    if (!plan) return
+    if (!plan || isConfirmed) return
     const newCompleted = completedMeals.includes(mealId)
       ? completedMeals.filter(id => id !== mealId)
       : [...completedMeals, mealId]
     setCompletedMeals(newCompleted)
-    await upsertLog(plan, newCompleted, macros, log?.confirmed || false)
+
+    // Auto-recalculate macros from plan meal data whenever meals change
+    const planHasMacros = plan.meals.some(m => (m.calories ?? 0) > 0)
+    let updatedMacros = macros
+    if (planHasMacros) {
+      const checkedMeals = plan.meals.filter(m => newCompleted.includes(m.id))
+      const totals = checkedMeals.reduce(
+        (acc, m) => ({
+          calories: acc.calories + (m.calories ?? 0),
+          protein:  acc.protein  + (m.protein  ?? 0),
+          carbs:    acc.carbs    + (m.carbs     ?? 0),
+          fat:      acc.fat      + (m.fat       ?? 0),
+        }),
+        { calories: 0, protein: 0, carbs: 0, fat: 0 },
+      )
+      updatedMacros = {
+        calories: totals.calories > 0 ? String(Math.round(totals.calories)) : '',
+        protein:  totals.protein  > 0 ? String(Math.round(totals.protein))  : '',
+        carbs:    totals.carbs    > 0 ? String(Math.round(totals.carbs))    : '',
+        fat:      totals.fat      > 0 ? String(Math.round(totals.fat))      : '',
+      }
+      setMacros(updatedMacros)
+    }
+
+    await upsertLog(plan, newCompleted, updatedMacros, false)
   }
 
   const upsertLog = async (p: MealPlan, completed: string[], m: MacroInput, confirmed: boolean) => {
     const payload = {
       client_id: p.client_id, trainer_id: p.trainer_id,
-      plan_id: p.id, date: today,
+      plan_id: p.id, date: selectedDate,
       meals_completed: completed,
       calories: m.calories ? parseInt(m.calories) : null,
       protein: m.protein ? parseInt(m.protein) : null,
@@ -237,18 +314,20 @@ export default function NutritionScreen() {
     if (!plan) return
     setSaving(true)
 
-    // If client hasn't manually entered macros, auto-fill from confirmed meals' plan data
-    const hasManualMacros = Object.values(macros).some(v => v && v !== '' && v !== '0')
+    // macros are already in sync with completedMeals (kept up-to-date by toggleMeal).
+    // If somehow macros are still empty AND plan has data, calculate as a fallback.
+    const planHasMacros = plan.meals.some(m => (m.calories ?? 0) > 0)
+    const hasAnyMacros = Object.values(macros).some(v => v && v !== '' && v !== '0')
     let finalMacros = macros
 
-    if (!hasManualMacros && completedMeals.length > 0) {
-      const confirmedMealData = plan.meals.filter(m => completedMeals.includes(m.id))
-      const totals = confirmedMealData.reduce(
-        (acc, meal) => ({
-          calories: acc.calories + (meal.calories ?? 0),
-          protein:  acc.protein  + (meal.protein  ?? 0),
-          carbs:    acc.carbs    + (meal.carbs     ?? 0),
-          fat:      acc.fat      + (meal.fat       ?? 0),
+    if (!hasAnyMacros && planHasMacros && completedMeals.length > 0) {
+      const checkedMeals = plan.meals.filter(m => completedMeals.includes(m.id))
+      const totals = checkedMeals.reduce(
+        (acc, m) => ({
+          calories: acc.calories + (m.calories ?? 0),
+          protein:  acc.protein  + (m.protein  ?? 0),
+          carbs:    acc.carbs    + (m.carbs     ?? 0),
+          fat:      acc.fat      + (m.fat       ?? 0),
         }),
         { calories: 0, protein: 0, carbs: 0, fat: 0 },
       )
@@ -258,7 +337,6 @@ export default function NutritionScreen() {
         carbs:    totals.carbs    > 0 ? String(Math.round(totals.carbs))    : '',
         fat:      totals.fat      > 0 ? String(Math.round(totals.fat))      : '',
       }
-      // Also update the UI state so user can see what was auto-filled
       setMacros(finalMacros)
     }
 
@@ -358,10 +436,35 @@ export default function NutritionScreen() {
             </View>
           )}
 
+          {/* Date navigation */}
+          <View style={styles.dateNav}>
+            <TouchableOpacity
+              style={[styles.dateNavBtn, !canGoBack && styles.dateNavBtnDisabled]}
+              onPress={() => { if (canGoBack) setSelectedDate(offsetDate(selectedDate, -1)) }}
+              disabled={!canGoBack}
+            >
+              <Text style={[styles.dateNavArrow, !canGoBack && { opacity: 0.3 }]}>‹</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={styles.dateNavLabel}>{fmtSelectedDate(selectedDate)}</Text>
+              {selectedDate !== today && log?.confirmed && (
+                <View style={styles.dateNavLockedBadge}>
+                  <Text style={styles.dateNavLockedText}>🔒 {lang === 'hr' ? 'Zaključan dan' : 'Day locked'}</Text>
+                </View>
+              )}
+            </View>
+            <TouchableOpacity
+              style={[styles.dateNavBtn, !canGoForward && styles.dateNavBtnDisabled]}
+              onPress={() => { if (canGoForward) setSelectedDate(offsetDate(selectedDate, 1)) }}
+              disabled={!canGoForward}
+            >
+              <Text style={[styles.dateNavArrow, !canGoForward && { opacity: 0.3 }]}>›</Text>
+            </TouchableOpacity>
+          </View>
+
           <View>
             <View style={styles.dayProgressHeader}>
-              <Text style={styles.dayProgressLabel}>{t('nutr_today')}</Text>
-              <Text style={styles.dayProgressCount}>{completedCount} / {totalMeals} {t('nutr_meals_count')}</Text>
+              <Text style={styles.dayProgressLabel}>{completedCount} / {totalMeals} {t('nutr_meals_count')}</Text>
             </View>
             <View style={styles.dayProgressBar}>
               <View style={[styles.dayProgressFill, {
@@ -407,8 +510,13 @@ export default function NutritionScreen() {
           return (
             <View key={meal.id} style={[styles.mealCard, isCompleted && styles.mealCardDone]}>
               <View style={styles.mealHeader}>
-                <TouchableOpacity style={styles.mealCheckBtn} onPress={() => toggleMeal(meal.id)}>
-                  <View style={[styles.mealCheck, isCompleted && styles.mealCheckDone]}>
+                <TouchableOpacity
+                  style={styles.mealCheckBtn}
+                  onPress={() => toggleMeal(meal.id)}
+                  disabled={isConfirmed}
+                  activeOpacity={isConfirmed ? 1 : 0.7}
+                >
+                  <View style={[styles.mealCheck, isCompleted && styles.mealCheckDone, isConfirmed && { opacity: 0.7 }]}>
                     {isCompleted && <Text style={styles.mealCheckText}>✓</Text>}
                   </View>
                 </TouchableOpacity>
@@ -435,7 +543,7 @@ export default function NutritionScreen() {
                       { v: `${meal.fat}g`, l: t('nutr_fat') },
                     ].map((item, i) => (
                       <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-                        <Text style={styles.mealMacroValue}>{item.v}</Text>
+                        <Text style={[styles.mealMacroValue, { color: MACRO_COLORS[i] }]}>{item.v}</Text>
                         <Text style={styles.mealMacroLabel}>{item.l}</Text>
                         {i < 3 && <View style={styles.mealMacroDivider} />}
                       </View>
@@ -512,8 +620,36 @@ export default function NutritionScreen() {
         ) : (
           <TouchableOpacity
             style={styles.editBtn}
-            onPress={() => log && supabase.from('nutrition_logs').update({ confirmed: false })
-              .eq('id', log.id).then(() => setLog(prev => prev ? { ...prev, confirmed: false } : null))}
+            onPress={() => {
+              if (!log) return
+              supabase.from('nutrition_logs').update({ confirmed: false })
+                .eq('id', log.id)
+                .then(() => {
+                  setLog(prev => prev ? { ...prev, confirmed: false } : null)
+                  // Recalculate macros from currently checked meals so editing starts fresh
+                  if (plan) {
+                    const planHasMacros = plan.meals.some(m => (m.calories ?? 0) > 0)
+                    if (planHasMacros) {
+                      const checkedMeals = plan.meals.filter(m => completedMeals.includes(m.id))
+                      const totals = checkedMeals.reduce(
+                        (acc, m) => ({
+                          calories: acc.calories + (m.calories ?? 0),
+                          protein:  acc.protein  + (m.protein  ?? 0),
+                          carbs:    acc.carbs    + (m.carbs     ?? 0),
+                          fat:      acc.fat      + (m.fat       ?? 0),
+                        }),
+                        { calories: 0, protein: 0, carbs: 0, fat: 0 },
+                      )
+                      setMacros({
+                        calories: totals.calories > 0 ? String(Math.round(totals.calories)) : '',
+                        protein:  totals.protein  > 0 ? String(Math.round(totals.protein))  : '',
+                        carbs:    totals.carbs    > 0 ? String(Math.round(totals.carbs))    : '',
+                        fat:      totals.fat      > 0 ? String(Math.round(totals.fat))      : '',
+                      })
+                    }
+                  }
+                })
+            }}
           >
             <Text style={styles.editBtnText}>{t('nutr_edit_btn')}</Text>
           </TouchableOpacity>
@@ -550,6 +686,21 @@ const styles = StyleSheet.create({
   macroItem: { flex: 1, alignItems: 'center' },
   macroValue: { fontSize: 16, fontWeight: '800', color: 'white' },
   macroLabel: { fontSize: 10, color: '#6ee7b7', marginTop: 2, textAlign: 'center' },
+
+  dateNav: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12,
+    paddingHorizontal: 4, paddingVertical: 4, marginBottom: 14,
+  },
+  dateNavBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
+  dateNavBtnDisabled: { opacity: 0.3 },
+  dateNavArrow: { fontSize: 22, color: 'white', fontWeight: '300' },
+  dateNavLabel: { fontSize: 14, fontWeight: '700', color: 'white', textAlign: 'center' },
+  dateNavLockedBadge: {
+    marginTop: 3, backgroundColor: 'rgba(0,0,0,0.25)', borderRadius: 6,
+    paddingHorizontal: 8, paddingVertical: 2,
+  },
+  dateNavLockedText: { fontSize: 10, color: 'rgba(255,255,255,0.85)', fontWeight: '600' },
 
   dayProgressHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   dayProgressLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },

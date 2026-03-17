@@ -130,10 +130,9 @@ export default function LoginScreen() {
                   styles.inputWrap,
                   loginState === 'error' && !password && styles.inputWrapError,
                 ]}>
-                  <Text style={styles.inputIcon}>@</Text>
                   <TextInput
                     style={styles.input}
-                    placeholder="tvoj@email.com"
+                    placeholder={t('login_email_placeholder')}
                     placeholderTextColor="#9ca3af"
                     value={email}
                     onChangeText={v => { setEmail(v); setLoginState('idle') }}
@@ -155,7 +154,6 @@ export default function LoginScreen() {
                     { transform: [{ translateX: shakeAnim }] },
                   ]}
                 >
-                  <Text style={styles.inputIcon}>*</Text>
                   <TextInput
                     style={styles.input}
                     placeholder="••••••••"
@@ -271,7 +269,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   inputWrapError: { borderColor: '#ef4444', backgroundColor: '#fff5f5' },
-  inputIcon: { fontSize: 16, marginRight: 10, opacity: 0.5 },
   input: {
     flex: 1, fontSize: 15, color: '#111827',
     paddingVertical: Platform.OS === 'ios' ? 14 : 12,

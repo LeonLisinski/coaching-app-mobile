@@ -73,7 +73,8 @@ const confirmStyles = StyleSheet.create({
 
 export default function CheckinScreen() {
   const router = useRouter()
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
+  const locale = lang === 'en' ? 'en' : 'hr'
   const DAYS = t('days_long').split(',')
   const [dailyParams, setDailyParams] = useState<Parameter[]>([])
   const [weeklyParams, setWeeklyParams] = useState<Parameter[]>([])
@@ -221,7 +222,7 @@ export default function CheckinScreen() {
             />
             {param.unit && (
               <View style={styles.unitBox}>
-                <Text style={styles.unitText}>{param.unit}</Text>
+                <Text style={styles.unitText} numberOfLines={1} adjustsFontSizeToFit>{param.unit}</Text>
               </View>
             )}
           </View>
@@ -320,7 +321,7 @@ export default function CheckinScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>
-            {new Date().toLocaleDateString('hr', { weekday: 'long', day: '2-digit', month: 'long' })}
+            {new Date().toLocaleDateString(locale, { weekday: 'long', day: '2-digit', month: 'long' })}
           </Text>
           {config && (
             <Text style={styles.headerMeta}>
@@ -407,23 +408,27 @@ export default function CheckinScreen() {
                   {photoPositions.map(position => {
                     const existingUrl = (existingCheckin?.photo_urls as any[])?.find((p: any) => p.position === position)?.url
                     const displayUri = photos[position] || existingUrl
+                    const posLabel = position === 'front' ? t('ci_photo_front')
+                      : position === 'back'  ? t('ci_photo_back')
+                      : position === 'side'  ? t('ci_photo_side')
+                      : position
                     return (
                       <View key={position} style={styles.photoCard}>
-                        <Text style={styles.photoLabel}>{position}</Text>
+                        <Text style={styles.photoLabel}>{posLabel}</Text>
                         {displayUri ? (
-                          <TouchableOpacity onPress={() => Alert.alert(position, 'Odaberi', [
-                            { text: 'Galerija', onPress: () => pickPhoto(position) },
-                            { text: 'Kamera', onPress: () => takePhoto(position) },
-                            { text: 'Odustani', style: 'cancel' },
+                          <TouchableOpacity onPress={() => Alert.alert(posLabel, t('ci_photo_select'), [
+                            { text: t('ci_photo_gallery'), onPress: () => pickPhoto(position) },
+                            { text: t('ci_photo_camera'), onPress: () => takePhoto(position) },
+                            { text: t('ci_photo_cancel'), style: 'cancel' },
                           ])}>
                             <Image source={{ uri: displayUri }} style={styles.photoImg} />
                             <Text style={styles.photoChangeText}>{t('ci_photo_change')}</Text>
                           </TouchableOpacity>
                         ) : (
-                          <TouchableOpacity style={styles.photoEmpty} onPress={() => Alert.alert(position, 'Odaberi', [
-                            { text: 'Galerija', onPress: () => pickPhoto(position) },
-                            { text: 'Kamera', onPress: () => takePhoto(position) },
-                            { text: 'Odustani', style: 'cancel' },
+                          <TouchableOpacity style={styles.photoEmpty} onPress={() => Alert.alert(posLabel, t('ci_photo_select'), [
+                            { text: t('ci_photo_gallery'), onPress: () => pickPhoto(position) },
+                            { text: t('ci_photo_camera'), onPress: () => takePhoto(position) },
+                            { text: t('ci_photo_cancel'), style: 'cancel' },
                           ])}>
                             <Text style={styles.photoEmptyText}>{t('ci_photo_add')}</Text>
                           </TouchableOpacity>
@@ -509,17 +514,17 @@ const styles = StyleSheet.create({
   req: { color: '#ef4444' },
   numberBox: {
     flexDirection: 'row', alignItems: 'stretch',
-    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, overflow: 'hidden', minWidth: 110,
+    borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, overflow: 'hidden',
   },
   numberInput: {
-    width: 64, paddingHorizontal: 10, paddingVertical: 8,
+    width: 62, paddingHorizontal: 8, paddingVertical: 8,
     fontSize: 17, fontWeight: '700', color: '#111827', textAlign: 'center',
   },
   unitBox: {
-    backgroundColor: '#f9fafb', borderLeftWidth: 1, borderLeftColor: '#e5e7eb',
-    paddingHorizontal: 10, paddingVertical: 8, justifyContent: 'center',
+    minWidth: 44, maxWidth: 70, backgroundColor: '#f9fafb', borderLeftWidth: 1, borderLeftColor: '#e5e7eb',
+    paddingHorizontal: 8, paddingVertical: 8, justifyContent: 'center', alignItems: 'center',
   },
-  unitText: { fontSize: 13, fontWeight: '600', color: '#9ca3af' },
+  unitText: { fontSize: 11, fontWeight: '600', color: '#9ca3af' },
 
   // ── Full-width cards (text, bool, select) ──
   paramCard: {

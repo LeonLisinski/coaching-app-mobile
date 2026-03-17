@@ -347,7 +347,8 @@ function UpdateModal({
 export default function TrainingScreen() {
   const router = useRouter()
   const navigation = useNavigation()
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
+  const locale = lang === 'en' ? 'en' : 'hr'
   const [plan, setPlan] = useState<WorkoutPlan | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeDay, setActiveDay] = useState<PlanDay | null>(null)
@@ -583,7 +584,7 @@ export default function TrainingScreen() {
           </TouchableOpacity>
           <Text style={styles.sessionTitle}>{activeDay.name}</Text>
           <Text style={styles.sessionDate}>
-            {new Date().toLocaleDateString('hr', { day: '2-digit', month: 'long' })}
+            {new Date().toLocaleDateString(locale, { day: '2-digit', month: 'long' })}
           </Text>
         </View>
 
@@ -622,7 +623,7 @@ export default function TrainingScreen() {
                 {last ? (
                   <View style={styles.lastLogRow}>
                     <Text style={styles.lastLogLabel}>
-                      {t('train_prev_last')} ({new Date(last.date).toLocaleDateString('hr', { day: '2-digit', month: 'short' })}):
+                      {t('train_prev_last')} ({new Date(last.date).toLocaleDateString(locale, { day: '2-digit', month: 'short' })}):
                     </Text>
                     <Text style={styles.lastLogValue}>
                       {last.sets.map(s => `${s.weight || '?'}kg × ${s.reps || '?'}`).join('  |  ')}

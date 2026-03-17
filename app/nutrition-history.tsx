@@ -172,10 +172,10 @@ export default function NutritionHistoryScreen() {
     if (clientId) fetchWeek(clientId, week.start, week.end)
   }, [weekOffset, clientId])
 
-  // Re-fetch current week when screen comes into focus (e.g. after confirming day in nutrition tab)
+  // Re-fetch current week on focus (catches confirms/edits made from main nutrition tab)
   useFocusEffect(
     useCallback(() => {
-      if (clientId && weekOffset === 0) fetchWeek(clientId, week.start, week.end)
+      if (clientId) fetchWeek(clientId, week.start, week.end)
     }, [clientId, weekOffset]),
   )
 
