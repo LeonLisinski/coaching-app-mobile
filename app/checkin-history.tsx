@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
 import { Image } from 'expo-image'
 import { useRouter } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator, Dimensions, Modal, Platform,
   ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View,
@@ -170,12 +170,13 @@ const lbStyles = StyleSheet.create({
 
 // ── Check-in Card ─────────────────────────────────────────────────────────────
 function CheckinCard({
-  checkin, params, onPhotoPress, highlightComment = false,
+  checkin, params, onPhotoPress, highlightComment = false, filterMode = 'all',
 }: {
   checkin: CheckinEntry
   params: Parameter[]
   onPhotoPress: (photos: PhotoEntry[], index: number) => void
   highlightComment?: boolean
+  filterMode?: FilterMode
 }) {
   const { t } = useLanguage()
   const weekNum = getWeekNumber(checkin.date)
@@ -262,8 +263,8 @@ function CheckinCard({
         <Text style={cardStyles.emptyText}>Nema unesenih vrijednosti</Text>
       )}
 
-      {/* Trainer comment */}
-      {checkin.trainer_comment ? (
+      {/* Trainer comment — hidden in 'photos' tab */}
+      {checkin.trainer_comment && filterMode !== 'photos' ? (
         <View style={[cardStyles.commentCard, highlightComment && cardStyles.commentCardHighlight]}>
           <View style={cardStyles.commentHeader}>
             <Text style={cardStyles.commentLabel}>{t('ch_trainer_comment')}</Text>
@@ -272,8 +273,8 @@ function CheckinCard({
         </View>
       ) : null}
 
-      {/* Progress photos */}
-      {photos.length > 0 && (
+      {/* Progress photos — hidden in 'comments' tab */}
+      {photos.length > 0 && filterMode !== 'comments' && (
         <View style={cardStyles.photosSection}>
           <Text style={cardStyles.photosSectionLabel}>Fotografije napretka</Text>
           <ScrollView
@@ -438,6 +439,13 @@ export default function CheckinHistoryScreen() {
 
   useEffect(() => { fetchData() }, [])
 
+  // Must be before any early returns (Rules of Hooks)
+  const filtered = useMemo(() => {
+    if (filter === 'comments') return checkins.filter(c => !!c.trainer_comment)
+    if (filter === 'photos')   return checkins.filter(c => Array.isArray(c.photo_urls) && c.photo_urls.some(p => !!p?.url))
+    return checkins
+  }, [filter, checkins])
+
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -488,15 +496,10 @@ export default function CheckinHistoryScreen() {
   }
 
   const totalPhotos = checkins.reduce(
-    (sum, c) => sum + (c.photo_urls?.filter(p => p?.url).length ?? 0), 0,
+    (sum, c) => sum + (Array.isArray(c.photo_urls) ? c.photo_urls.filter(p => p?.url).length : 0), 0,
   )
-  const withComments = checkins.filter(c => c.trainer_comment).length
-  const withPhotos   = checkins.filter(c => (c.photo_urls?.filter(p => p?.url).length ?? 0) > 0)
-
-  const filtered =
-    filter === 'comments' ? checkins.filter(c => c.trainer_comment) :
-    filter === 'photos'   ? checkins.filter(c => (c.photo_urls?.filter(p => p?.url).length ?? 0) > 0) :
-    checkins
+  const withComments = checkins.filter(c => !!c.trainer_comment).length
+  const withPhotos   = checkins.filter(c => Array.isArray(c.photo_urls) && c.photo_urls.some(p => !!p?.url))
 
   return (
     <View style={styles.container}>
@@ -630,6 +633,7 @@ export default function CheckinHistoryScreen() {
                         setLightbox({ photos, index, date: checkin.date })
                       }
                       highlightComment={filter === 'comments'}
+                      filterMode={filter}
                     />
                   </TouchableOpacity>
                 )

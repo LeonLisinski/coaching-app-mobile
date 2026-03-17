@@ -102,7 +102,8 @@ export default function CheckinScreen() {
     const { data: clientData } = await supabase.from('clients').select('id, trainer_id').eq('user_id', user.id).single()
     if (!clientData) return setLoading(false)
     setClientId(clientData.id); setTrainerId(clientData.trainer_id)
-    const today = new Date().toISOString().split('T')[0]
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     const [{ data: paramsData }, { data: configData }, { data: todayCheckin }, { data: todayDaily }, { data: lastCheckin }] = await Promise.all([
       supabase.from('checkin_parameters').select('*').eq('trainer_id', clientData.trainer_id).order('order_index'),
       supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions').eq('client_id', clientData.id).single(),
@@ -168,7 +169,8 @@ export default function CheckinScreen() {
     const missing = dailyParams.filter(p => p.required && !dailyValues[p.id] && dailyValues[p.id] !== 0)
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingDaily(true)
-    const today = new Date().toISOString().split('T')[0]
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     if (existingDailyLog) {
       await supabase.from('daily_logs').update({ values: dailyValues }).eq('id', existingDailyLog.id)
     } else {
@@ -183,7 +185,8 @@ export default function CheckinScreen() {
     const missing = weeklyParams.filter(p => p.required && !checkinValues[p.id] && checkinValues[p.id] !== 0)
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingCheckin(true)
-    const today = new Date().toISOString().split('T')[0]
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     let uploadedUrls: Record<string, string> = {}
     for (const [position, uri] of Object.entries(photos)) {
       const url = await uploadPhoto(uri, position)

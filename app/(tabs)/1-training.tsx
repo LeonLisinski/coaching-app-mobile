@@ -3,7 +3,7 @@ import { useLanguage } from '@/lib/LanguageContext'
 import { useNavigation, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
-  ActivityIndicator, Alert, Animated, KeyboardAvoidingView, Linking, Modal,
+  ActivityIndicator, Alert, Animated, Keyboard, KeyboardAvoidingView, Linking, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native'
 
@@ -501,6 +501,7 @@ export default function TrainingScreen() {
 
       // Start rest timer if completing a set
       if (justCompleted) {
+        Keyboard.dismiss()
         const planEx = activeDay?.exercises.find(e => e.exercise_id === exerciseId)
         if (planEx?.rest_seconds) {
           setRestTimer({ exerciseId, seconds: planEx.rest_seconds })
