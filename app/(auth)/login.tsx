@@ -6,6 +6,7 @@ import { Redirect } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   Keyboard,
   KeyboardAvoidingView,
@@ -71,7 +72,7 @@ export default function LoginScreen() {
     setLoginState('loading')
     setErrorMsg('')
 
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data: authData, error } = await supabase.auth.signInWithPassword({
       email: trimmedEmail,
       password,
     })
@@ -84,6 +85,34 @@ export default function LoginScreen() {
       setErrorMsg(msg)
       setLoginState('error')
       shakeError()
+      return
+    }
+
+    if (authData.user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role, deletion_requested_at')
+        .eq('id', authData.user.id)
+        .single()
+
+      // Role check — only clients can use the mobile app
+      if (profile?.role !== 'client') {
+        await supabase.auth.signOut()
+        setErrorMsg('Ova aplikacija je namijenjena klijentima. Treneri koriste web platformu na app.unitlift.com.')
+        setLoginState('error')
+        shakeError()
+        return
+      }
+
+      // Check if account is pending deletion
+      if (profile?.deletion_requested_at) {
+        const purgeDate = new Date(new Date(profile.deletion_requested_at).getTime() + 30 * 24 * 60 * 60 * 1000)
+        Alert.alert(
+          '⚠️ Račun označen za brisanje',
+          `Tvoj račun bit će trajno obrisan ${purgeDate.toLocaleDateString()}.\n\nAko želiš poništiti brisanje, idi u Postavke → Obriši račun → Poništi zahtjev.`,
+          [{ text: 'Razumijem', style: 'default' }],
+        )
+      }
     }
     // success: _layout will redirect automatically
   }
