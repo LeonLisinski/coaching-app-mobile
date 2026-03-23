@@ -46,6 +46,15 @@ interface MessageRecord {
 }
 
 Deno.serve(async (req: Request) => {
+  // Verify the request comes from our Supabase webhook (not public internet)
+  const webhookSecret = Deno.env.get('WEBHOOK_SECRET')
+  if (webhookSecret) {
+    const incoming = req.headers.get('x-webhook-secret')
+    if (incoming !== webhookSecret) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+  }
+
   try {
     const { record } = await req.json() as { record: MessageRecord }
 
