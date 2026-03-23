@@ -446,6 +446,22 @@ export default function CheckinHistoryScreen() {
     return checkins
   }, [filter, checkins])
 
+  const resolvePhotoUrls = async (checkinList: CheckinEntry[]): Promise<CheckinEntry[]> => {
+    const paths = checkinList.flatMap(c =>
+      (c.photo_urls ?? []).map(p => p?.url).filter((u): u is string => !!u && !u.startsWith('http'))
+    )
+    if (!paths.length) return checkinList
+    const { data: signed } = await supabase.storage.from('checkin-images').createSignedUrls(paths, 3600)
+    if (!signed) return checkinList
+    const urlMap = Object.fromEntries(signed.map(s => [s.path, s.signedUrl]))
+    return checkinList.map(c => ({
+      ...c,
+      photo_urls: (c.photo_urls ?? []).map(p =>
+        p?.url && !p.url.startsWith('http') ? { ...p, url: urlMap[p.url] ?? p.url } : p
+      ),
+    }))
+  }
+
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -466,7 +482,7 @@ export default function CheckinHistoryScreen() {
         .order('order_index'),
     ])
 
-    if (checkinData) setCheckins(checkinData)
+    if (checkinData) setCheckins(await resolvePhotoUrls(checkinData))
     if (paramData) setParams(paramData)
     setLoading(false)
   }

@@ -109,8 +109,10 @@ export default function SettingsScreen() {
   }
 
   const handleCancelDeletion = async () => {
-    await supabase.from('profiles').update({ deletion_requested_at: null }).eq('id', (await supabase.auth.getUser()).data.user!.id)
-    loadProfile()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return
+    const { error } = await supabase.from('profiles').update({ deletion_requested_at: null }).eq('id', user.id)
+    if (!error) loadProfile()
   }
 
   return (

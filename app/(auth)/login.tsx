@@ -36,8 +36,9 @@ export default function LoginScreen() {
   const shakeAnim = useRef(new Animated.Value(0)).current
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => setSession(session))
-    supabase.auth.onAuthStateChange((_e, session) => setSession(session))
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session)).catch(() => {})
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setSession(session))
+    return () => subscription.unsubscribe()
 
     // Entrance animation
     Animated.parallel([

@@ -42,18 +42,41 @@ export default function ComparePhotosScreen() {
     fetchCheckins(idList)
   }, [ids])
 
+  const resolvePhotoUrls = async (checkinList: CheckinData[]): Promise<CheckinData[]> => {
+    const paths = checkinList.flatMap(c =>
+      (c.photo_urls ?? []).map(p => p?.url).filter((u): u is string => !!u && !u.startsWith('http'))
+    )
+    if (!paths.length) return checkinList
+    const { data: signed } = await supabase.storage.from('checkin-images').createSignedUrls(paths, 3600)
+    if (!signed) return checkinList
+    const urlMap = Object.fromEntries(signed.map(s => [s.path, s.signedUrl]))
+    return checkinList.map(c => ({
+      ...c,
+      photo_urls: (c.photo_urls ?? []).map(p =>
+        p?.url && !p.url.startsWith('http') ? { ...p, url: urlMap[p.url] ?? p.url } : p
+      ),
+    }))
+  }
+
   const fetchCheckins = async (idList: string[]) => {
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) { setLoading(false); return }
+    const { data: clientData } = await supabase.from('clients').select('id').eq('user_id', user.id).single()
+    if (!clientData) { setLoading(false); return }
+
     const { data } = await supabase
       .from('checkins')
       .select('id, date, photo_urls')
       .in('id', idList)
+      .eq('client_id', clientData.id)
       .order('date', { ascending: true })
 
     if (data) {
-      setCheckins(data)
+      const resolved = await resolvePhotoUrls(data)
+      setCheckins(resolved)
       // Determine default position: first position found across all selected check-ins
       const allPositions = new Set<string>()
-      for (const c of data) {
+      for (const c of resolved) {
         for (const p of (c.photo_urls ?? []).filter(p => p?.url)) {
           allPositions.add(p.position)
         }

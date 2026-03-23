@@ -93,14 +93,15 @@ export default function CheckinScreen() {
   const [dailySubmitted, setDailySubmitted] = useState(false)
   const [checkinSubmitted, setCheckinSubmitted] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [resolvedExistingUrls, setResolvedExistingUrls] = useState<Record<string, string>>({})
 
   useEffect(() => { fetchData() }, [])
 
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    if (!user) { setLoading(false); return }
     const { data: clientData } = await supabase.from('clients').select('id, trainer_id').eq('user_id', user.id).single()
-    if (!clientData) return setLoading(false)
+    if (!clientData) { setLoading(false); return }
     setClientId(clientData.id); setTrainerId(clientData.trainer_id)
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -116,7 +117,24 @@ export default function CheckinScreen() {
       setWeeklyParams(paramsData.filter((p: Parameter) => p.frequency === 'weekly'))
     }
     if (configData) setConfig(configData)
-    if (todayCheckin) { setExistingCheckin(todayCheckin); setCheckinValues(todayCheckin.values || {}); setCheckinSubmitted(true) }
+    if (todayCheckin) {
+      setExistingCheckin(todayCheckin)
+      setCheckinValues(todayCheckin.values || {})
+      setCheckinSubmitted(true)
+      const existingPhotoUrls: any[] = todayCheckin.photo_urls || []
+      const paths = existingPhotoUrls.map((p: any) => p?.url).filter((u: string) => u && !u.startsWith('http'))
+      if (paths.length) {
+        const { data: signed } = await supabase.storage.from('checkin-images').createSignedUrls(paths, 3600)
+        if (signed) {
+          const urlMap: Record<string, string> = Object.fromEntries(
+            signed.filter((s: any) => s.path && s.signedUrl).map((s: any) => [s.path, s.signedUrl])
+          )
+          const resolved: Record<string, string> = {}
+          existingPhotoUrls.forEach((p: any) => { if (p?.position && p?.url) resolved[p.position] = urlMap[p.url] ?? p.url })
+          setResolvedExistingUrls(resolved)
+        }
+      }
+    }
     if (todayDaily) {
       setExistingDailyLog(todayDaily)
       setDailyValues(todayDaily.values || {})
@@ -160,7 +178,7 @@ export default function CheckinScreen() {
       const fileName = `${clientId}/${new Date().toISOString().split('T')[0]}_${position}_${Date.now()}.jpg`
       const { error } = await supabase.storage.from('checkin-images').upload(fileName, uint8Array, { contentType: 'image/jpeg', upsert: true })
       if (error) throw error
-      return supabase.storage.from('checkin-images').getPublicUrl(fileName).data.publicUrl
+      return fileName
     } catch (e) { console.error('Upload error:', e); return null }
   }
 
@@ -171,13 +189,21 @@ export default function CheckinScreen() {
     setSavingDaily(true)
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    if (existingDailyLog) {
-      await supabase.from('daily_logs').update({ values: dailyValues }).eq('id', existingDailyLog.id)
-    } else {
-      const { data } = await supabase.from('daily_logs').insert({ client_id: clientId, trainer_id: trainerId, date: today, values: dailyValues }).select().single()
-      if (data) setExistingDailyLog(data)
+    try {
+      if (existingDailyLog) {
+        const { error } = await supabase.from('daily_logs').update({ values: dailyValues }).eq('id', existingDailyLog.id)
+        if (error) throw error
+      } else {
+        const { data, error } = await supabase.from('daily_logs').insert({ client_id: clientId, trainer_id: trainerId, date: today, values: dailyValues }).select().single()
+        if (error) throw error
+        if (data) setExistingDailyLog(data)
+      }
+      setDailySubmitted(true)
+    } catch {
+      Alert.alert(t('error'), t('ci_err_save'))
+    } finally {
+      setSavingDaily(false)
     }
-    setSavingDaily(false); setDailySubmitted(true)
   }
 
   const handleSubmitCheckin = async () => {
@@ -185,22 +211,37 @@ export default function CheckinScreen() {
     const missing = weeklyParams.filter(p => p.required && !checkinValues[p.id] && checkinValues[p.id] !== 0)
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingCheckin(true)
-    const now = new Date()
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    let uploadedUrls: Record<string, string> = {}
-    for (const [position, uri] of Object.entries(photos)) {
-      const url = await uploadPhoto(uri, position)
-      if (url) uploadedUrls[position] = url
+    try {
+      const now = new Date()
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+      const uploadedUrls: Record<string, string> = {}
+      let uploadFailed = false
+      for (const [position, uri] of Object.entries(photos)) {
+        const url = await uploadPhoto(uri, position)
+        if (url) uploadedUrls[position] = url
+        else uploadFailed = true
+      }
+      if (uploadFailed) {
+        Alert.alert(t('error'), t('ci_err_upload'))
+        return
+      }
+      const photoUrlsArray = Object.entries(uploadedUrls).map(([position, url]) => ({ position, url }))
+      const payload = { client_id: clientId, trainer_id: trainerId, date: today, values: checkinValues, photo_urls: photoUrlsArray.length > 0 ? photoUrlsArray : null }
+      if (existingCheckin) {
+        const { error } = await supabase.from('checkins').update(payload).eq('id', existingCheckin.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('checkins').insert(payload)
+        if (error) throw error
+      }
+      setCheckinSubmitted(true)
+      setShowConfirm(false)
+      Alert.alert(t('ci_sent_alert'), t('ci_sent_alert_msg'))
+    } catch {
+      Alert.alert(t('error'), t('ci_err_save'))
+    } finally {
+      setSavingCheckin(false)
     }
-    const photoUrlsArray = Object.entries(uploadedUrls).map(([position, url]) => ({ position, url }))
-    const payload = { client_id: clientId, trainer_id: trainerId, date: today, values: checkinValues, photo_urls: photoUrlsArray.length > 0 ? photoUrlsArray : null }
-    if (existingCheckin) {
-      await supabase.from('checkins').update(payload).eq('id', existingCheckin.id)
-    } else {
-      await supabase.from('checkins').insert(payload)
-    }
-    setSavingCheckin(false); setCheckinSubmitted(true); setShowConfirm(false)
-    Alert.alert(t('ci_sent_alert'), t('ci_sent_alert_msg'))
   }
 
   // ── Render one parameter ──────────────────────────────────────────────────
@@ -409,7 +450,7 @@ export default function CheckinScreen() {
                 <Text style={styles.photosTitle}>{t('ci_photos_title')}</Text>
                 <View style={styles.photosGrid}>
                   {photoPositions.map(position => {
-                    const existingUrl = (existingCheckin?.photo_urls as any[])?.find((p: any) => p.position === position)?.url
+                    const existingUrl = resolvedExistingUrls[position] || (existingCheckin?.photo_urls as any[])?.find((p: any) => p.position === position)?.url
                     const displayUri = photos[position] || existingUrl
                     const posLabel = position === 'front' ? t('ci_photo_front')
                       : position === 'back'  ? t('ci_photo_back')
