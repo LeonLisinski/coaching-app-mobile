@@ -1,17 +1,19 @@
 {
   "expo": {
-    "name": "coaching-app-mobile",
-    "slug": "coaching-app-mobile",
+    "name": "UnitLift",
+    "slug": "unitlift",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "coachingappmobile",
+    "scheme": "unitlift",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.unitlift.app"
     },
     "android": {
+      "package": "com.unitlift.app",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
