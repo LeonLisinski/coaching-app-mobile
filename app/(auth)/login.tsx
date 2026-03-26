@@ -38,13 +38,14 @@ export default function LoginScreen() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session)).catch(() => {})
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => setSession(session))
-    return () => subscription.unsubscribe()
 
     // Entrance animation
     Animated.parallel([
       Animated.timing(fadeAnim,  { toValue: 1, duration: 600, useNativeDriver: true }),
       Animated.timing(slideAnim, { toValue: 0, duration: 600, useNativeDriver: true }),
     ]).start()
+
+    return () => subscription.unsubscribe()
   }, [])
 
   if (session) return <Redirect href="/(tabs)" />

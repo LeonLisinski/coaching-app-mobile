@@ -22,8 +22,8 @@
     "production": {
       "ios": {
         "appleId": "leon@unitlift.com",
-        "ascAppId": "",
-        "appleTeamId": ""
+        "ascAppId": "6761137784",
+        "appleTeamId": "UYM7Z9A956"
       },
       "android": {
         "serviceAccountKeyPath": "./google-play-service-account.json",
