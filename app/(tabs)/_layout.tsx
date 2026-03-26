@@ -31,19 +31,11 @@ export default function TabsLayout() {
         return
       }
 
-      // Check trainer's subscription
-      const { data: sub } = await supabase
-        .from('subscriptions')
-        .select('status, trial_end')
-        .eq('trainer_id', client.trainer_id)
-        .maybeSingle()
+      // Check trainer's subscription via SECURITY DEFINER RPC (bypasses RLS)
+      const { data: trainerActive } = await supabase
+        .rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id })
 
-      const now = new Date()
-      const trainerActive =
-        sub?.status === 'active' ||
-        (sub?.status === 'trialing' && (!sub.trial_end || new Date(sub.trial_end) > now))
-
-      if (!trainerActive) {
+      if (trainerActive === false) {
         setAccessStatus('inactive_trainer')
         return
       }
