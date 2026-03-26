@@ -1,25 +1,55 @@
 import { supabase } from '@/lib/supabase'
-import { Tabs } from 'expo-router'
+import { Tabs, useRouter } from 'expo-router'
 import { ClipboardCheck, Dumbbell, Home, MessageCircle, Salad } from 'lucide-react-native'
 import { useEffect, useState } from 'react'
-import { Platform, Text, View } from 'react-native'
+import { ActivityIndicator, Platform, Text, TouchableOpacity, View } from 'react-native'
+
+type AccessStatus = 'loading' | 'ok' | 'inactive_client' | 'inactive_trainer'
 
 export default function TabsLayout() {
+  const router = useRouter()
   const [unreadCount, setUnreadCount] = useState(0)
   const [clientId, setClientId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
+  const [accessStatus, setAccessStatus] = useState<AccessStatus>('loading')
 
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
+      if (!user) { setAccessStatus('ok'); return }
       setUserId(user.id)
 
+      // Fetch client record
       const { data: client } = await supabase
-        .from('clients').select('id')
-        .eq('user_id', user.id).single()
-      if (!client) return
+        .from('clients')
+        .select('id, active, trainer_id')
+        .eq('user_id', user.id)
+        .single()
+
+      if (!client || !client.active) {
+        setAccessStatus('inactive_client')
+        return
+      }
+
+      // Check trainer's subscription
+      const { data: sub } = await supabase
+        .from('subscriptions')
+        .select('status, trial_end')
+        .eq('trainer_id', client.trainer_id)
+        .maybeSingle()
+
+      const now = new Date()
+      const trainerActive =
+        sub?.status === 'active' ||
+        (sub?.status === 'trialing' && (!sub.trial_end || new Date(sub.trial_end) > now))
+
+      if (!trainerActive) {
+        setAccessStatus('inactive_trainer')
+        return
+      }
+
       setClientId(client.id)
+      setAccessStatus('ok')
 
       const { count } = await supabase
         .from('messages')
@@ -54,6 +84,44 @@ export default function TabsLayout() {
 
     return () => { supabase.removeChannel(channel) }
   }, [clientId, userId])
+
+  if (accessStatus === 'loading') {
+    return (
+      <View style={bs.center}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+      </View>
+    )
+  }
+
+  if (accessStatus === 'inactive_client') {
+    return (
+      <View style={bs.center}>
+        <View style={bs.card}>
+          <Text style={bs.icon}>🔒</Text>
+          <Text style={bs.title}>Račun je deaktiviran</Text>
+          <Text style={bs.sub}>Vaš trener je deaktivirao vaš račun. Kontaktirajte trenera za više informacija.</Text>
+          <TouchableOpacity style={bs.btn} onPress={async () => { await supabase.auth.signOut(); router.replace('/(auth)/login') }}>
+            <Text style={bs.btnText}>Odjava</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    )
+  }
+
+  if (accessStatus === 'inactive_trainer') {
+    return (
+      <View style={bs.center}>
+        <View style={bs.card}>
+          <Text style={bs.icon}>⚠️</Text>
+          <Text style={bs.title}>Usluga privremeno nedostupna</Text>
+          <Text style={bs.sub}>Vaš trener trenutno nema aktivnu pretplatu. Kontaktirajte ga kako bi obnovio pristup.</Text>
+          <TouchableOpacity style={bs.btn} onPress={async () => { await supabase.auth.signOut(); router.replace('/(auth)/login') }}>
+            <Text style={bs.btnText}>Odjava</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    )
+  }
 
   return (
     <Tabs
@@ -148,3 +216,14 @@ export default function TabsLayout() {
     </Tabs>
   )
 }
+
+import { StyleSheet } from 'react-native'
+const bs = StyleSheet.create({
+  center: { flex: 1, backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', padding: 24 },
+  card: { backgroundColor: 'white', borderRadius: 24, padding: 28, alignItems: 'center', width: '100%', maxWidth: 360, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16, elevation: 4 },
+  icon: { fontSize: 48, marginBottom: 16 },
+  title: { fontSize: 18, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 10 },
+  sub: { fontSize: 14, color: '#6b7280', textAlign: 'center', lineHeight: 21, marginBottom: 24 },
+  btn: { backgroundColor: '#3b82f6', borderRadius: 14, paddingVertical: 13, paddingHorizontal: 32 },
+  btnText: { color: 'white', fontWeight: '700', fontSize: 15 },
+})
