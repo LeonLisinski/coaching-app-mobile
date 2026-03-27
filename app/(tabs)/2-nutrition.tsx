@@ -245,7 +245,7 @@ export default function NutritionScreen() {
       ...planData,
       plan_type: assigned.plan_type || 'default',
       meals: meals.map((m: any) => ({
-        ...m, ingredients: m.recipe_id ? (recipeMap[m.recipe_id] || []) : [],
+        ...m, ingredients: m.recipe_id ? (recipeMap[m.recipe_id]?.length ? recipeMap[m.recipe_id] : (m.foods || [])) : (m.foods || []),
       })),
       assigned_at: assigned.assigned_at,
       notes: assigned.notes,
