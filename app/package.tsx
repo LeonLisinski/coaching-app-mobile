@@ -73,8 +73,6 @@ export default function PackageScreen() {
 
   useEffect(() => { fetchData() }, [])
 
-  const [debugInfo, setDebugInfo] = useState<string | null>(null)
-
   const fetchData = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -93,12 +91,9 @@ export default function PackageScreen() {
 
     if (rawErr) {
       console.warn('client_packages error:', rawErr.message)
-      setDebugInfo(`Greška: ${rawErr.message}`)
       setLoading(false)
       return
     }
-
-    setDebugInfo(`Pronađeno ${rawCp?.length ?? 0} paketa. Statusi: ${rawCp?.map(r => r.status).join(', ') || 'nema'}`)
 
     if (!rawCp || rawCp.length === 0) {
       setLoading(false)
@@ -175,13 +170,6 @@ export default function PackageScreen() {
           </View>
         )}
 
-        {/* Temp debug info — remove after confirming query works */}
-        {debugInfo && (
-          <View style={{ margin: 16, padding: 12, backgroundColor: '#f1f5f9', borderRadius: 10, borderWidth: 1, borderColor: '#e2e8f0' }}>
-            <Text style={{ fontSize: 11, color: '#475569', fontFamily: 'monospace' }}>{debugInfo}</Text>
-          </View>
-        )}
-
         <View style={{ height: 40 }} />
       </ScrollView>
     </View>
@@ -238,7 +226,11 @@ function ActivePackageCard({ cp }: { cp: ClientPackage }) {
         </View>
         <View style={activeStyles.daysCard}>
           <Text style={activeStyles.daysNum}>
-            {pkg?.duration_days ? durationLabel(pkg.duration_days) : '—'}
+            {pkg?.duration_days
+              ? durationLabel(pkg.duration_days)
+              : cp.start_date && cp.end_date
+                ? durationLabel(Math.round((new Date(cp.end_date + 'T00:00:00').getTime() - new Date(cp.start_date + 'T00:00:00').getTime()) / 86400000))
+                : 'Neograničeno'}
           </Text>
           <Text style={activeStyles.daysLabel}>{t('pkg_duration')}</Text>
         </View>
@@ -246,7 +238,7 @@ function ActivePackageCard({ cp }: { cp: ClientPackage }) {
           <Text style={activeStyles.daysNum}>
             {cp.price ? `${cp.price} €` : '—'}
           </Text>
-          <Text style={activeStyles.daysLabel}>cijena</Text>
+          <Text style={activeStyles.daysLabel}>jednokratno</Text>
         </View>
       </View>
 
