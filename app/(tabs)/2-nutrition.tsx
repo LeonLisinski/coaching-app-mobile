@@ -230,7 +230,7 @@ export default function NutritionScreen() {
       meal_type: m.meal_type, meal_order: i,
       recipe_id: m.recipe_id || null, recipe_name: m.recipe_name || null,
       calories: m.calories || 0, protein: m.protein || 0,
-      carbs: m.carbs || 0, fat: m.fat || 0, foods: m.foods || [],
+      carbs: m.carbs || 0, fat: m.fat || 0, foods: m.custom_ingredients || m.foods || [],
     }))
 
     const recipeIds = meals.map((m: any) => m.recipe_id).filter(Boolean)
