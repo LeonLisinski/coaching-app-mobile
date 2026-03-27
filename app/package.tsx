@@ -190,7 +190,6 @@ function ActivePackageCard({ cp }: { cp: ClientPackage }) {
         <View style={[activeStyles.colorDot, { backgroundColor: pkgColor }]} />
         <View style={{ flex: 1 }}>
           <Text style={activeStyles.name}>{pkg?.name ?? 'Aktivni paket'}</Text>
-          <Text style={activeStyles.activeBadge}>● AKTIVNO</Text>
         </View>
         <View style={[activeStyles.payBadge, { backgroundColor: statusConf.bg }]}>
           <Text style={[activeStyles.payBadgeText, { color: statusConf.color }]}>
