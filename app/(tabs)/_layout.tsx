@@ -168,6 +168,7 @@ export default function TabsLayout() {
       />
       <Tabs.Screen
         name="4-chat"
+        listeners={{ tabPress: () => setUnreadCount(0) }}
         options={{
           tabBarIcon: ({ color, focused }) => (
             <View style={{ alignItems: 'center' }}>

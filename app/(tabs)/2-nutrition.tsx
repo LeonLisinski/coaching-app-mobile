@@ -48,6 +48,12 @@ const getToday = () => {
 
 const MACRO_COLORS = ['#f97316', '#3b82f6', '#10b981', '#8b5cf6']
 
+// Format number to max 2 decimal places, strips trailing zeros
+const n = (v: number | null | undefined): string => {
+  if (v == null || isNaN(Number(v))) return '0'
+  return parseFloat(Number(v).toFixed(2)).toString()
+}
+
 export default function NutritionScreen() {
   const router = useRouter()
   const { t, lang } = useLanguage()
@@ -525,7 +531,7 @@ export default function NutritionScreen() {
                     {MEAL_TYPE_LABELS[meal.meal_type] || meal.meal_type}
                   </Text>
                   {meal.recipe_name && (
-                    <Text style={styles.mealMeta}>{meal.recipe_name} · {meal.calories} kcal</Text>
+                    <Text style={styles.mealMeta}>{meal.recipe_name} · {n(meal.calories)} kcal</Text>
                   )}
                 </TouchableOpacity>
                 <TouchableOpacity onPress={() => setExpandedMeal(isExpanded ? null : meal.id)}>
@@ -537,10 +543,10 @@ export default function NutritionScreen() {
                 <View style={styles.foodList}>
                   <View style={styles.mealMacroRow}>
                     {[
-                      { v: meal.calories, l: 'kcal' },
-                      { v: `${meal.protein}g`, l: t('nutr_protein') },
-                      { v: `${meal.carbs}g`, l: t('nutr_carbs') },
-                      { v: `${meal.fat}g`, l: t('nutr_fat') },
+                      { v: n(meal.calories), l: 'kcal' },
+                      { v: `${n(meal.protein)}g`, l: t('nutr_protein') },
+                      { v: `${n(meal.carbs)}g`, l: t('nutr_carbs') },
+                      { v: `${n(meal.fat)}g`, l: t('nutr_fat') },
                     ].map((item, i) => (
                       <View key={i} style={{ flex: 1, alignItems: 'center' }}>
                         <Text style={[styles.mealMacroValue, { color: MACRO_COLORS[i] }]}>{item.v}</Text>
@@ -561,15 +567,15 @@ export default function NutritionScreen() {
                             </View>
                             <View>
                               <Text style={styles.ingredientName}>{ing.name}</Text>
-                              <Text style={styles.ingredientGrams}>{ing.grams}g</Text>
+                              <Text style={styles.ingredientGrams}>{n(ing.grams)}g</Text>
                             </View>
                           </View>
                           <View style={styles.ingredientMacros}>
-                            <Text style={styles.ingredientCal}>{ing.calories} kcal</Text>
+                            <Text style={styles.ingredientCal}>{n(ing.calories)} kcal</Text>
                             <View style={styles.ingredientTags}>
-                              <Text style={styles.ingredientTag}>P: {ing.protein}g</Text>
-                              <Text style={styles.ingredientTag}>C: {ing.carbs}g</Text>
-                              <Text style={styles.ingredientTag}>M: {ing.fat}g</Text>
+                              <Text style={styles.ingredientTag}>P: {n(ing.protein)}g</Text>
+                              <Text style={styles.ingredientTag}>C: {n(ing.carbs)}g</Text>
+                              <Text style={styles.ingredientTag}>M: {n(ing.fat)}g</Text>
                             </View>
                           </View>
                         </View>
