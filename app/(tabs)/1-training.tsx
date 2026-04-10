@@ -395,7 +395,7 @@ export default function TrainingScreen() {
 
     const { data: assigned } = await supabase
       .from('client_workout_plans')
-      .select('workout_plan_id, assigned_at, notes')
+      .select('workout_plan_id, assigned_at, notes, days')
       .eq('client_id', clientData.id)
       .eq('active', true)
       .order('assigned_at', { ascending: false })
@@ -410,6 +410,12 @@ export default function TrainingScreen() {
 
     if (!planData) return setLoading(false)
 
+    // client_workout_plans.days is a per-client override (set via edit-plan-dialog);
+    // if present it takes precedence over workout_plans.days
+    const effectiveDays = (assigned.days && (assigned.days as PlanDay[]).length > 0)
+      ? assigned.days as PlanDay[]
+      : planData.days || []
+
     const { data: weekLogs } = await supabase
       .from('workout_logs').select('day_name, date')
       .eq('client_id', clientData.id).eq('plan_id', planData.id)
@@ -418,7 +424,7 @@ export default function TrainingScreen() {
     setCompletedThisWeek(weekLogs?.map(l => l.day_name) || [])
     setPlan({
       id: planData.id, name: planData.name, description: planData.description,
-      days: planData.days || [], assigned_at: assigned.assigned_at,
+      days: effectiveDays, assigned_at: assigned.assigned_at,
       notes: assigned.notes, client_id: clientData.id, trainer_id: clientData.trainer_id,
     })
     setLoading(false)
