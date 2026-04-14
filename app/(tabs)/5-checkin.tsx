@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
 import { useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
@@ -16,6 +18,7 @@ type CheckinConfig = { checkin_day: number | null; photo_frequency: string | nul
 type CheckinValues = Record<string, any>
 type ExistingCheckin = { id: string; values: CheckinValues; photo_urls: any[] | null; trainer_comment: string | null }
 type DailyLog = { id: string; values: CheckinValues }
+type RecentComment = { comment: string; date: string }
 
 // DAYS is now derived from i18n inside components
 
@@ -74,6 +77,7 @@ const confirmStyles = StyleSheet.create({
 export default function CheckinScreen() {
   const router = useRouter()
   const { t, lang } = useLanguage()
+  const { clientData: ctxClient } = useClient()
   const locale = lang === 'en' ? 'en' : 'hr'
   const DAYS = t('days_long').split(',')
   const [dailyParams, setDailyParams] = useState<Parameter[]>([])
@@ -94,15 +98,21 @@ export default function CheckinScreen() {
   const [checkinSubmitted, setCheckinSubmitted] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
   const [resolvedExistingUrls, setResolvedExistingUrls] = useState<Record<string, string>>({})
+  const [recentComment, setRecentComment] = useState<RecentComment | null>(null)
+  const [isLate, setIsLate] = useState(false)
+  const [savingDraft, setSavingDraft] = useState(false)
+  const [draftRestored, setDraftRestored] = useState(false)
 
   useEffect(() => { fetchData() }, [])
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
-    const { data: clientData } = await supabase.from('clients').select('id, trainer_id').eq('user_id', user.id).single()
-    if (!clientData) { setLoading(false); return }
-    setClientId(clientData.id); setTrainerId(clientData.trainer_id)
+    // Use shared ClientContext — avoids a redundant clients fetch
+    const cId = ctxClient?.clientId
+    const tId = ctxClient?.trainerId
+    if (!cId || !tId) { setLoading(false); return }
+    setClientId(cId); setTrainerId(tId)
+    // Alias so the rest of the function body below stays unchanged
+    const clientData = { id: cId, trainer_id: tId }
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     const [{ data: paramsData }, { data: configData }, { data: todayCheckin }, { data: todayDaily }, { data: lastCheckin }] = await Promise.all([
@@ -150,7 +160,70 @@ export default function CheckinScreen() {
     }
     const prevCheckin = lastCheckin?.find((c: any) => c.date !== today)
     setLastCheckinDate(prevCheckin?.date || null)
+
+    // Fetch most recent trainer comment — trainer may comment on a past check-in,
+    // so we can't rely on today's check-in alone.
+    const { data: commentedCheckin } = await supabase
+      .from('checkins')
+      .select('trainer_comment, date')
+      .eq('client_id', clientData.id)
+      .not('trainer_comment', 'is', null)
+      .neq('trainer_comment', '')
+      .order('date', { ascending: false })
+      .limit(1)
+      .single()
+    if (commentedCheckin?.trainer_comment) {
+      setRecentComment({ comment: commentedCheckin.trainer_comment, date: commentedCheckin.date })
+    }
+
+    // Detect late check-in: if the expected checkin day has passed this week
+    // and no check-in has been submitted since that expected date.
+    if (configData?.checkin_day !== null && configData?.checkin_day !== undefined) {
+      const todayDayNum = new Date().getDay()
+      const daysSince = (todayDayNum - configData.checkin_day + 7) % 7
+      if (daysSince > 0) {
+        const expectedDate = new Date()
+        expectedDate.setDate(expectedDate.getDate() - daysSince)
+        const expectedStr = `${expectedDate.getFullYear()}-${String(expectedDate.getMonth() + 1).padStart(2, '0')}-${String(expectedDate.getDate()).padStart(2, '0')}`
+        const hasCheckinThisWeek = lastCheckin?.some((c: any) => c.date >= expectedStr)
+        setIsLate(!hasCheckinThisWeek)
+      }
+    }
+
+    // Restore daily draft if no daily log submitted today
+    if (!todayDaily) {
+      try {
+        const key = `daily-draft-${cId}`
+        const raw = await AsyncStorage.getItem(key)
+        if (raw) {
+          const draft = JSON.parse(raw)
+          setDailyValues(draft)
+          setDraftRestored(true)
+        }
+      } catch {}
+    }
+
     setLoading(false)
+  }
+
+  const dailyDraftKey = clientId ? `daily-draft-${clientId}` : null
+
+  const saveDraft = async () => {
+    if (!dailyDraftKey) return
+    setSavingDraft(true)
+    try {
+      await AsyncStorage.setItem(dailyDraftKey, JSON.stringify(dailyValues))
+      Alert.alert('', t('ci_draft_saved'))
+    } catch {
+      // draft save is best-effort — don't block the user
+    } finally {
+      setSavingDraft(false)
+    }
+  }
+
+  const clearDraft = async () => {
+    if (!dailyDraftKey) return
+    try { await AsyncStorage.removeItem(dailyDraftKey) } catch {}
   }
 
   const setDailyValue = (id: string, v: any) => setDailyValues(p => ({ ...p, [id]: v }))
@@ -184,7 +257,12 @@ export default function CheckinScreen() {
 
   const handleSaveDaily = async () => {
     if (!clientId || !trainerId) return
-    const missing = dailyParams.filter(p => p.required && !dailyValues[p.id] && dailyValues[p.id] !== 0)
+    // null/undefined/"" are missing; false (boolean "Ne") and 0 are valid answers
+    const missing = dailyParams.filter(p => {
+      if (!p.required) return false
+      const v = dailyValues[p.id]
+      return v === undefined || v === null || v === ''
+    })
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingDaily(true)
     const now = new Date()
@@ -199,6 +277,8 @@ export default function CheckinScreen() {
         if (data) setExistingDailyLog(data)
       }
       setDailySubmitted(true)
+      setDraftRestored(false)
+      clearDraft()
     } catch {
       Alert.alert(t('error'), t('ci_err_save'))
     } finally {
@@ -208,7 +288,12 @@ export default function CheckinScreen() {
 
   const handleSubmitCheckin = async () => {
     if (!clientId || !trainerId) return
-    const missing = weeklyParams.filter(p => p.required && !checkinValues[p.id] && checkinValues[p.id] !== 0)
+    // null/undefined/"" are missing; false (boolean "Ne") and 0 are valid answers
+    const missing = weeklyParams.filter(p => {
+      if (!p.required) return false
+      const v = checkinValues[p.id]
+      return v === undefined || v === null || v === ''
+    })
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingCheckin(true)
     try {
@@ -374,6 +459,30 @@ export default function CheckinScreen() {
           )}
         </View>
 
+        {/* Late check-in warning */}
+        {isLate && !checkinSubmitted && (
+          <View style={styles.lateCard}>
+            <Text style={styles.lateIcon}>⚠️</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.lateTitle}>{t('ci_late_title')}</Text>
+              <Text style={styles.lateSub}>{t('ci_late_sub')}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Most recent trainer comment (from any past check-in) */}
+        {recentComment && (
+          <View style={styles.recentCommentCard}>
+            <View style={styles.recentCommentHeader}>
+              <Text style={styles.recentCommentLabel}>{t('ci_trainer_comment')}</Text>
+              <Text style={styles.recentCommentDate}>
+                {new Date(recentComment.date).toLocaleDateString(locale, { day: '2-digit', month: 'short' })}
+              </Text>
+            </View>
+            <Text style={styles.recentCommentText}>{recentComment.comment}</Text>
+          </View>
+        )}
+
         {/* ── DNEVNI UNOS ─────────────────────────────────────────── */}
         {dailyParams.length > 0 && (
           <View style={styles.block}>
@@ -383,20 +492,50 @@ export default function CheckinScreen() {
               {dailySubmitted && <View style={styles.pill}><Text style={styles.pillText}>{t('ci_done_today')}</Text></View>}
             </View>
 
+            {/* Draft restored banner */}
+            {draftRestored && !dailySubmitted && (
+              <View style={styles.draftBanner}>
+                <Text style={styles.draftBannerText}>↻  {t('ci_draft_restored')}</Text>
+              </View>
+            )}
+
             <View style={styles.numberList}>
               {dailyParams.filter(p => p.type === 'number').map(p => renderParam(p, dailyValues, setDailyValue))}
             </View>
             {dailyParams.filter(p => p.type !== 'number').map(p => renderParam(p, dailyValues, setDailyValue))}
 
-            <TouchableOpacity
-              style={[styles.btn, { backgroundColor: dailySubmitted ? '#9ca3af' : '#f59e0b' }]}
-              onPress={handleSaveDaily}
-              disabled={savingDaily}
-            >
-              <Text style={styles.btnText}>
-                {savingDaily ? t('ci_saving') : dailySubmitted ? `↺  ${t('update')}` : `✓  ${t('ci_save')}`}
-              </Text>
-            </TouchableOpacity>
+            {dailySubmitted ? (
+              <TouchableOpacity
+                style={[styles.btn, { backgroundColor: '#9ca3af' }]}
+                onPress={handleSaveDaily}
+                disabled={savingDaily}
+              >
+                <Text style={styles.btnText}>
+                  {savingDaily ? t('ci_saving') : `↺  ${t('update')}`}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.draftSubmitRow}>
+                <TouchableOpacity
+                  style={[styles.draftBtn, savingDraft && { opacity: 0.6 }]}
+                  onPress={saveDraft}
+                  disabled={savingDraft}
+                >
+                  <Text style={styles.draftBtnText}>
+                    {savingDraft ? '...' : t('ci_draft_btn')}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.submitBtn, { backgroundColor: '#f59e0b' }, savingDaily && { opacity: 0.6 }]}
+                  onPress={handleSaveDaily}
+                  disabled={savingDaily}
+                >
+                  <Text style={styles.btnText}>
+                    {savingDaily ? t('ci_saving') : t('ci_daily_send_btn')}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </View>
         )}
 
@@ -422,12 +561,7 @@ export default function CheckinScreen() {
               </View>
             </View>
 
-            {existingCheckin?.trainer_comment && (
-              <View style={styles.commentCard}>
-                <Text style={styles.commentLabel}>{t('ci_trainer_comment')}</Text>
-                <Text style={styles.commentText}>{existingCheckin.trainer_comment}</Text>
-              </View>
-            )}
+            {/* Trainer comment shown at top of screen (covers all past check-ins, not just today) */}
 
             {checkinSubmitted && (
               <View style={styles.submittedRow}>
@@ -484,15 +618,27 @@ export default function CheckinScreen() {
               </View>
             )}
 
-            <TouchableOpacity
-              style={[styles.btn, { backgroundColor: checkinSubmitted ? '#9ca3af' : '#78350f' }]}
-              onPress={() => setShowConfirm(true)}
-              disabled={savingCheckin}
-            >
-              <Text style={styles.btnText}>
-                {savingCheckin ? t('ci_sending') : checkinSubmitted ? t('ci_update_btn') : t('ci_send_btn')}
-              </Text>
-            </TouchableOpacity>
+            {checkinSubmitted ? (
+              <TouchableOpacity
+                style={[styles.btn, { backgroundColor: '#9ca3af' }]}
+                onPress={() => setShowConfirm(true)}
+                disabled={savingCheckin}
+              >
+                <Text style={styles.btnText}>
+                  {savingCheckin ? t('ci_sending') : t('ci_update_btn')}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.btn, { backgroundColor: '#78350f' }, savingCheckin && { opacity: 0.6 }]}
+                onPress={() => setShowConfirm(true)}
+                disabled={savingCheckin}
+              >
+                <Text style={styles.btnText}>
+                  {savingCheckin ? t('ci_sending') : t('ci_send_btn')}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -603,6 +749,41 @@ const styles = StyleSheet.create({
   commentCard: { backgroundColor: '#eff6ff', borderRadius: 14, padding: 14, marginBottom: 10, borderLeftWidth: 3, borderLeftColor: '#3b82f6' },
   commentLabel: { fontSize: 12, fontWeight: '700', color: '#1d4ed8', marginBottom: 4 },
   commentText: { fontSize: 13, color: '#1e40af', lineHeight: 20 },
+
+  lateCard: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    marginHorizontal: 16, marginTop: 12,
+    backgroundColor: '#fff7ed', borderRadius: 14, padding: 14,
+    borderWidth: 1, borderColor: '#fed7aa',
+  },
+  lateIcon: { fontSize: 18, marginTop: 1 },
+  lateTitle: { fontSize: 14, fontWeight: '700', color: '#c2410c', marginBottom: 2 },
+  lateSub: { fontSize: 12, color: '#ea580c', lineHeight: 17 },
+
+  recentCommentCard: {
+    marginHorizontal: 16, marginTop: 12,
+    backgroundColor: '#eff6ff', borderRadius: 14, padding: 14,
+    borderLeftWidth: 3, borderLeftColor: '#3b82f6',
+  },
+  recentCommentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },
+  recentCommentLabel: { fontSize: 12, fontWeight: '700', color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: 0.5 },
+  recentCommentDate: { fontSize: 11, color: '#93c5fd', fontWeight: '600' },
+  recentCommentText: { fontSize: 14, color: '#1e40af', lineHeight: 20 },
+  draftBanner: {
+    backgroundColor: '#fefce8', borderRadius: 12, padding: 10, marginBottom: 12,
+    borderWidth: 1, borderColor: '#fde68a',
+  },
+  draftBannerText: { fontSize: 12, color: '#92400e', fontWeight: '600' },
+  draftSubmitRow: { flexDirection: 'row', gap: 10 },
+  draftBtn: {
+    flex: 1, backgroundColor: '#f3f4f6', borderRadius: 14, paddingVertical: 15,
+    alignItems: 'center', borderWidth: 1.5, borderColor: '#d1d5db',
+  },
+  draftBtnText: { fontSize: 14, fontWeight: '700', color: '#6b7280' },
+  submitBtn: {
+    flex: 2, backgroundColor: '#78350f', borderRadius: 14, paddingVertical: 15,
+    alignItems: 'center',
+  },
   submittedRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#f0fdf4', borderRadius: 14, marginBottom: 10, padding: 14, borderWidth: 1, borderColor: '#86efac' },
   submittedCheck: { width: 32, height: 32, borderRadius: 99, backgroundColor: '#22c55e', alignItems: 'center', justifyContent: 'center' },
   submittedCheckText: { color: 'white', fontSize: 16, fontWeight: '700' },

@@ -6,9 +6,15 @@ const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL!
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!
 
 const ExpoSecureStoreAdapter = {
-  getItem: (key: string) => SecureStore.getItemAsync(key),
-  setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
-  removeItem: (key: string) => SecureStore.deleteItemAsync(key),
+  getItem: async (key: string) => {
+    try { return await SecureStore.getItemAsync(key) } catch { return null }
+  },
+  setItem: async (key: string, value: string) => {
+    try { await SecureStore.setItemAsync(key, value) } catch { }
+  },
+  removeItem: async (key: string) => {
+    try { await SecureStore.deleteItemAsync(key) } catch { }
+  },
 }
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {

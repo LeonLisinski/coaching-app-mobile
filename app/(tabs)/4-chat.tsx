@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator, Image, Keyboard, Linking, Modal,
@@ -154,6 +155,7 @@ const profileStyles = StyleSheet.create({
 // ── Main Chat Screen ──────────────────────────────────────────────────────────
 export default function ChatScreen() {
   const { t } = useLanguage()
+  const { clientData } = useClient()
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(true)
@@ -168,11 +170,22 @@ export default function ChatScreen() {
   const [hasMore, setHasMore] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const scrollRef = useRef<ScrollView>(null)
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null)
   const PAGE = 50
 
   const [kbOffset, setKbOffset] = useState(0)
 
-  useEffect(() => { initChat() }, [])
+  // Re-run when clientData arrives (context may be null on first render)
+  useEffect(() => {
+    if (!clientData?.clientId) return
+    initChat()
+    return () => {
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current)
+        channelRef.current = null
+      }
+    }
+  }, [clientData?.clientId])
 
   // Manual keyboard height tracking — more reliable than KeyboardAvoidingView inside tabs
   useEffect(() => {
@@ -188,26 +201,25 @@ export default function ChatScreen() {
   }, [])
 
   const initChat = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
-    setUserId(user.id)
+    // Use shared ClientContext — avoids a redundant clients fetch
+    const cId = clientData?.clientId
+    const tId = clientData?.trainerId
+    const uid = clientData?.userId
+    if (!cId || !tId || !uid) { setLoading(false); return }
 
-    const { data: clientData } = await supabase
-      .from('clients').select('id, trainer_id').eq('user_id', user.id).single()
-    if (!clientData) return setLoading(false)
-
-    setClientId(clientData.id)
-    setTrainerId(clientData.trainer_id)
+    setClientId(cId)
+    setTrainerId(tId)
+    setUserId(uid)
 
     const { data: tp } = await supabase
       .from('profiles')
       .select('id, full_name, avatar_url, bio, phone, email, website, instagram')
-      .eq('id', clientData.trainer_id)
+      .eq('id', tId)
       .single()
     if (tp) setTrainerProfile(tp)
 
-    await fetchMessages(clientData.id, clientData.trainer_id, user.id)
-    subscribeToMessages(clientData.id, clientData.trainer_id, user.id)
+    await fetchMessages(cId, tId, uid)
+    subscribeToMessages(cId, tId, uid)
   }
 
   const fetchMessages = async (cId: string, tId: string, uid: string) => {
@@ -244,13 +256,19 @@ export default function ChatScreen() {
   }
 
   const subscribeToMessages = (cId: string, tId: string, uid: string) => {
-    supabase.channel(`mobile-chat-${cId}`)
+    // Clean up any existing channel before creating a new one
+    if (channelRef.current) {
+      supabase.removeChannel(channelRef.current)
+      channelRef.current = null
+    }
+    channelRef.current = supabase.channel(`mobile-chat-${cId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
         const msg = payload.new as Message
-        if (msg.client_id === cId && msg.trainer_id === tId) {
-          setMessages(prev => prev.find(m => m.id === msg.id) ? prev : [...prev, msg])
-          supabase.from('messages').update({ read: true }).eq('id', msg.id).neq('sender_id', uid)
-        }
+        if (msg.client_id !== cId || msg.trainer_id !== tId) return
+        // Skip our own messages — they're already in state via optimistic update
+        if (msg.sender_id === uid) return
+        setMessages(prev => prev.find(m => m.id === msg.id) ? prev : [...prev, msg])
+        supabase.from('messages').update({ read: true }).eq('id', msg.id).neq('sender_id', uid)
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'messages' }, (payload) => {
         const msg = payload.new as Message
@@ -275,13 +293,20 @@ export default function ChatScreen() {
     setMessages(prev => [...prev, tempMsg])
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50)
 
-    const { data: saved } = await supabase
+    const { data: saved, error } = await supabase
       .from('messages')
       .insert({ trainer_id: trainerId, client_id: clientId, sender_id: userId, content, read: false })
       .select().single()
 
-    // Replace temp message with real record from DB
-    if (saved) setMessages(prev => prev.map(m => m.id === tempId ? saved : m))
+    if (saved) {
+      // Replace temp message with real record from DB
+      setMessages(prev => prev.map(m => m.id === tempId ? saved : m))
+    } else {
+      // Remove optimistic message and restore input so user can retry
+      setMessages(prev => prev.filter(m => m.id !== tempId))
+      setInput(content)
+      if (error) console.warn('Send failed:', error.message)
+    }
     setSending(false)
   }
 

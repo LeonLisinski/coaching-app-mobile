@@ -1,14 +1,17 @@
 import { supabase } from '@/lib/supabase'
 import { UnitLiftLogo } from '@/lib/UnitLiftLogo'
 import { useLanguage } from '@/lib/LanguageContext'
+import Constants from 'expo-constants'
 import { useRouter } from 'expo-router'
+import * as Linking from 'expo-linking'
 import { useEffect, useRef, useState } from 'react'
 import {
   Alert, Modal, Platform, ScrollView, StyleSheet, Text, TextInput,
   TouchableOpacity, View,
 } from 'react-native'
 
-const APP_VERSION = '1.0.0'
+const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0'
+const PRIVACY_POLICY_URL = 'https://www.unitlift.com/hr/privatnost'
 
 const LANG_OPTIONS = [
   { value: 'hr' as const, label: 'Hrvatski', flag: '🇭🇷' },
@@ -173,10 +176,18 @@ export default function SettingsScreen() {
             <Text style={styles.infoKey}>{t('settings_version')}</Text>
             <Text style={styles.infoVal}>{APP_VERSION}</Text>
           </View>
-          <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
+          <View style={styles.infoRow}>
             <Text style={styles.infoKey}>{t('settings_platform')}</Text>
             <Text style={styles.infoVal}>{Platform.OS === 'ios' ? 'iOS' : 'Android'}</Text>
           </View>
+          <TouchableOpacity
+            style={[styles.infoRow, { borderBottomWidth: 0 }]}
+            onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.infoKey}>{t('settings_privacy')}</Text>
+            <Text style={styles.privacyLink}>↗</Text>
+          </TouchableOpacity>
         </View>
 
         {/* Logout */}
@@ -331,6 +342,7 @@ const styles = StyleSheet.create({
   },
   infoKey: { fontSize: 14, color: '#374151', fontWeight: '500' },
   infoVal: { fontSize: 14, color: '#9ca3af' },
+  privacyLink: { fontSize: 14, color: '#1d4ed8', fontWeight: '600' },
 
   logoutBtn: {
     backgroundColor: '#fef2f2', borderRadius: 14, paddingVertical: 15,

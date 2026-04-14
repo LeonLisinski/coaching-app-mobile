@@ -1,6 +1,8 @@
 import { supabase } from '@/lib/supabase';
 import { useLanguage } from '@/lib/LanguageContext'
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useClient } from '@/lib/ClientContext'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
@@ -56,7 +58,9 @@ const n = (v: number | null | undefined): string => {
 
 export default function NutritionScreen() {
   const router = useRouter()
+  const navigation = useNavigation()
   const { t, lang } = useLanguage()
+  const { clientData: ctxClient } = useClient()
   const [plan, setPlan] = useState<MealPlan | null>(null)
   const [altPlan, setAltPlan] = useState<MealPlan | null>(null)
   const [planMode, setPlanMode] = useState<'training_day' | 'rest_day' | 'default' | null>(null)
@@ -100,6 +104,26 @@ export default function NutritionScreen() {
 
   useEffect(() => { fetchData() }, [])
 
+  // Auto-save manually-entered macros to AsyncStorage on blur (meal toggles already saved to DB via upsertLog)
+  useEffect(() => {
+    const unsub = (navigation as any).addListener('blur', () => {
+      if (!clientId || selectedDate !== today) return
+      const hasAny = Object.values(macros).some(v => v && v !== '')
+      if (!hasAny) return
+      AsyncStorage.setItem(`nutrition-macros-draft-${clientId}-${today}`, JSON.stringify(macros)).catch(() => {})
+    })
+    return unsub
+  }, [navigation, clientId, macros, selectedDate, today])
+
+  // Real-time draft save — persists macros to AsyncStorage on every change so values
+  // survive a crash or forced logout without waiting for a blur event
+  useEffect(() => {
+    if (!clientId || selectedDate !== today) return
+    const hasAny = Object.values(macros).some(v => v && v !== '')
+    if (!hasAny) return
+    AsyncStorage.setItem(`nutrition-macros-draft-${clientId}-${today}`, JSON.stringify(macros)).catch(() => {})
+  }, [macros])
+
   // When date changes (after initial load), just reload the log
   useEffect(() => {
     if (!clientId) return
@@ -115,84 +139,74 @@ export default function NutritionScreen() {
   )
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    // Use shared ClientContext — avoids a redundant clients fetch
+    // (created_at is not in context so we fetch a minimal profile if needed)
+    const cId = ctxClient?.clientId
+    const tId = ctxClient?.trainerId
+    if (!cId || !tId) return setLoading(false)
 
-    const { data: clientData } = await supabase
-      .from('clients').select('id, trainer_id, created_at').eq('user_id', user.id).single()
-    if (!clientData) return setLoading(false)
+    setClientId(cId)
+    setTrainerId(tId)
 
-    setClientId(clientData.id)
-    setTrainerId(clientData.trainer_id)
-    // Earliest day user can navigate back to
-    if (clientData.created_at) {
-      setMinDate(clientData.created_at.split('T')[0])
-    }
+    // Fetch created_at for minDate (not stored in context)
+    supabase.from('clients').select('created_at').eq('id', cId).single()
+      .then(({ data }) => { if (data?.created_at) setMinDate(data.created_at.split('T')[0]) })
 
-    // Read is_training_day from daily_logs (set by home screen answer)
-    const { data: dailyLog } = await supabase
-      .from('daily_logs')
-      .select('is_training_day')
-      .eq('client_id', clientData.id)
-      .eq('date', today)
-      .single()
+    // Alias for the rest of the function body
+    const clientData = { id: cId, trainer_id: tId }
+
+    // Round 2: daily_log + meal plans in parallel (both only need clientData.id)
+    const [{ data: dailyLog }, { data: allAssigned }] = await Promise.all([
+      supabase.from('daily_logs')
+        .select('is_training_day')
+        .eq('client_id', clientData.id).eq('date', today).single(),
+      supabase.from('client_meal_plans')
+        .select('meal_plan_id, assigned_at, notes, plan_type')
+        .eq('client_id', clientData.id).eq('active', true)
+        .order('assigned_at', { ascending: false }),
+    ])
 
     const todayIsTraining: boolean | null = dailyLog?.is_training_day ?? null
     setIsTrainingDay(todayIsTraining)
 
-    // Fetch all active meal plans
-    const { data: allAssigned } = await supabase
-      .from('client_meal_plans')
-      .select('meal_plan_id, assigned_at, notes, plan_type')
-      .eq('client_id', clientData.id)
-      .eq('active', true)
-      .order('assigned_at', { ascending: false })
-
     if (!allAssigned || allAssigned.length === 0) return setLoading(false)
 
-    const trainingPlan = allAssigned.find(p => p.plan_type === 'training_day')
-    const restPlan = allAssigned.find(p => p.plan_type === 'rest_day')
-    const defaultPlan = allAssigned.find(p => p.plan_type === 'default' || !p.plan_type)
+    const trainingPlan = allAssigned.find((p: any) => p.plan_type === 'training_day')
+    const restPlan = allAssigned.find((p: any) => p.plan_type === 'rest_day')
+    const defaultPlan = allAssigned.find((p: any) => p.plan_type === 'default' || !p.plan_type)
 
     let primaryAssigned = defaultPlan
     let mode: 'training_day' | 'rest_day' | 'default' = 'default'
+    let altAssigned: any = null
 
     if (trainingPlan && restPlan) {
-      // Both typed plans exist — use daily_log answer, fallback to default
       if (todayIsTraining === true) {
-        primaryAssigned = trainingPlan
-        mode = 'training_day'
+        primaryAssigned = trainingPlan; mode = 'training_day'; altAssigned = restPlan
       } else if (todayIsTraining === false) {
-        primaryAssigned = restPlan
-        mode = 'rest_day'
+        primaryAssigned = restPlan; mode = 'rest_day'; altAssigned = trainingPlan
       } else {
-        // Not answered yet — show default or training_day as fallback
         primaryAssigned = defaultPlan || trainingPlan
         mode = defaultPlan ? 'default' : 'training_day'
+        altAssigned = mode === 'training_day' ? restPlan : trainingPlan
       }
     } else if (trainingPlan) {
-      primaryAssigned = trainingPlan
-      mode = 'training_day'
+      primaryAssigned = trainingPlan; mode = 'training_day'
     } else if (restPlan) {
-      primaryAssigned = restPlan
-      mode = 'rest_day'
+      primaryAssigned = restPlan; mode = 'rest_day'
     }
 
     setPlanMode(mode)
     if (!primaryAssigned) return setLoading(false)
 
-    const loadedPlan = await loadPlanData(primaryAssigned, clientData.id, clientData.trainer_id)
+    // Round 3: load primary plan + alt plan + today's log in parallel
+    const [loadedPlan, loadedAlt] = await Promise.all([
+      loadPlanData(primaryAssigned, clientData.id, clientData.trainer_id),
+      altAssigned ? loadPlanData(altAssigned, clientData.id, clientData.trainer_id) : Promise.resolve(null),
+      fetchLogForDate(clientData.id, selectedDate),
+    ])
+
     if (loadedPlan) setPlan(loadedPlan)
-
-    // Alt plan for manual switch
-    if (trainingPlan && restPlan) {
-      const altAssigned = mode === 'training_day' ? restPlan : trainingPlan
-      const loadedAlt = await loadPlanData(altAssigned, clientData.id, clientData.trainer_id)
-      if (loadedAlt) setAltPlan(loadedAlt)
-    }
-
-    // Today's nutrition log
-    await fetchLogForDate(clientData.id, selectedDate)
+    if (loadedAlt) setAltPlan(loadedAlt)
     setLoading(false)
   }
 
@@ -207,12 +221,19 @@ export default function NutritionScreen() {
     if (logData) {
       setLog(logData)
       setCompletedMeals(logData.meals_completed || [])
-      setMacros({
+      const dbMacros = {
         calories: logData.calories?.toString() || '',
         protein: logData.protein?.toString() || '',
         carbs: logData.carbs?.toString() || '',
         fat: logData.fat?.toString() || '',
-      })
+      }
+      setMacros(dbMacros)
+    } else if (date === getToday()) {
+      // No DB log yet — try to restore draft macros from AsyncStorage
+      try {
+        const raw = await AsyncStorage.getItem(`nutrition-macros-draft-${cId}-${date}`)
+        if (raw) setMacros(JSON.parse(raw))
+      } catch {}
     }
     setLoadingLog(false)
   }
@@ -265,6 +286,8 @@ export default function NutritionScreen() {
 
   const toggleMeal = async (mealId: string) => {
     if (!plan || isConfirmed) return
+    const prevCompleted = completedMeals
+    const prevMacros = macros
     const newCompleted = completedMeals.includes(mealId)
       ? completedMeals.filter(id => id !== mealId)
       : [...completedMeals, mealId]
@@ -293,27 +316,35 @@ export default function NutritionScreen() {
       setMacros(updatedMacros)
     }
 
-    await upsertLog(plan, newCompleted, updatedMacros, false)
+    const ok = await upsertLog(plan, newCompleted, updatedMacros, false)
+    if (!ok) {
+      // Rollback optimistic update on failure
+      setCompletedMeals(prevCompleted)
+      setMacros(prevMacros)
+    }
   }
 
-  const upsertLog = async (p: MealPlan, completed: string[], m: MacroInput, confirmed: boolean) => {
+  const upsertLog = async (p: MealPlan, completed: string[], m: MacroInput, confirmed: boolean): Promise<boolean> => {
     const payload = {
       client_id: p.client_id, trainer_id: p.trainer_id,
       plan_id: p.id, date: selectedDate,
       meals_completed: completed,
-      calories: m.calories ? parseInt(m.calories) : null,
-      protein: m.protein ? parseInt(m.protein) : null,
-      carbs: m.carbs ? parseInt(m.carbs) : null,
-      fat: m.fat ? parseInt(m.fat) : null,
+      calories: m.calories ? parseFloat(m.calories) : null,
+      protein: m.protein ? parseFloat(m.protein) : null,
+      carbs: m.carbs ? parseFloat(m.carbs) : null,
+      fat: m.fat ? parseFloat(m.fat) : null,
       confirmed,
     }
     if (log?.id) {
-      const { data } = await supabase.from('nutrition_logs').update(payload).eq('id', log.id).select().single()
+      const { data, error } = await supabase.from('nutrition_logs').update(payload).eq('id', log.id).select().single()
+      if (error) { console.warn('upsertLog update error:', error.message); return false }
       if (data) setLog(data)
     } else {
-      const { data } = await supabase.from('nutrition_logs').insert(payload).select().single()
+      const { data, error } = await supabase.from('nutrition_logs').insert(payload).select().single()
+      if (error) { console.warn('upsertLog insert error:', error.message); return false }
       if (data) setLog(data)
     }
+    return true
   }
 
   const confirmDay = async () => {
@@ -347,6 +378,8 @@ export default function NutritionScreen() {
     }
 
     await upsertLog(plan, completedMeals, finalMacros, true)
+    // Clear draft since day is now confirmed
+    if (clientId) AsyncStorage.removeItem(`nutrition-macros-draft-${clientId}-${selectedDate}`).catch(() => {})
     setSaving(false)
     Alert.alert(t('nutr_day_confirmed_alert'), t('nutr_day_confirmed_msg'))
   }

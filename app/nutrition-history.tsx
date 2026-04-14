@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import {
@@ -155,6 +156,7 @@ const rowStyles = StyleSheet.create({
 export default function NutritionHistoryScreen() {
   const { t, lang } = useLanguage()
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const [loading, setLoading] = useState(true)
   const [weekOffset, setWeekOffset] = useState(0)
   const [logs, setLogs] = useState<NutritionLog[]>([])
@@ -180,14 +182,10 @@ export default function NutritionHistoryScreen() {
   )
 
   const initData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-    const { data: client } = await supabase
-      .from('clients').select('id')
-      .eq('user_id', user.id).single()
-    if (!client) { setLoading(false); return }
-    setClientId(client.id)
-    await fetchWeek(client.id, week.start, week.end)
+    const cId = ctxClient?.clientId
+    if (!cId) { setLoading(false); return }
+    setClientId(cId)
+    await fetchWeek(cId, week.start, week.end)
     setLoading(false)
   }
 

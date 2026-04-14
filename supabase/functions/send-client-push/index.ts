@@ -1,121 +1,202 @@
-/**
- * Supabase Edge Function: send-client-push
- *
- * Triggered by a Supabase Database Webhook on INSERT to the `messages` table.
- * Sends an Expo Push Notification to the client when the trainer sends a message.
- *
- * Deploy:
- *   supabase functions deploy send-client-push
- *
- * Set as a Database Webhook in Supabase Dashboard:
- *   Table: messages
- *   Event: INSERT
- *   URL: https://<project>.supabase.co/functions/v1/send-client-push
- *   Headers: { Authorization: Bearer <SERVICE_ROLE_KEY> }
- *
- * Required Supabase table (run once):
- *   create table expo_push_tokens (
- *     id uuid primary key default gen_random_uuid(),
- *     client_id uuid references clients(id) on delete cascade,
- *     token text not null,
- *     platform text not null,
- *     updated_at timestamptz default now(),
- *     unique(client_id)
- *   );
- */
+// send-client-push — Supabase Edge Function
+//
+// Triggered by database webhooks for 3 events:
+//   1. messages    INSERT  (sender_id = trainer_id  →  notify client)
+//   2. checkins    UPDATE  (trainer_comment added   →  notify client)
+//   3. client_packages INSERT                       →  notify client
+//
+// Database Webhook setup (Supabase Dashboard → Database → Webhooks):
+//   URL:    https://<project>.supabase.co/functions/v1/send-client-push
+//   Method: POST
+//   Secret header:  x-webhook-secret: <WEBHOOK_SECRET env var>
+//   Events: messages(INSERT), checkins(UPDATE), client_packages(INSERT)
+//
+// Required env vars (Settings → Edge Functions → Secrets):
+//   SUPABASE_URL              — auto-injected
+//   SUPABASE_SERVICE_ROLE_KEY — auto-injected
+//   WEBHOOK_SECRET            — your own random string for verifying the webhook
+//   EXPO_ACCESS_TOKEN         — optional, from expo.dev/accounts/.../access-tokens
 
-// Edge Function runs on Deno — declare globals so TS server doesn't error
-/* eslint-disable */
-declare const Deno: {
-  serve: (handler: (req: Request) => Promise<Response>) => void
-  env: { get: (key: string) => string | undefined }
-}
-
-// @ts-ignore — Deno URL imports are valid at runtime
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
-interface MessageRecord {
-  id: string
-  client_id: string
-  trainer_id: string
-  sender_id: string
-  content: string
-  created_at: string
+type WebhookPayload = {
+  type: 'INSERT' | 'UPDATE' | 'DELETE'
+  table: string
+  schema: string
+  record: Record<string, any>
+  old_record: Record<string, any> | null
 }
 
-Deno.serve(async (req: Request) => {
-  // Verify the request comes from our Supabase webhook (not public internet)
-  const webhookSecret = Deno.env.get('WEBHOOK_SECRET')
-  if (webhookSecret) {
-    const incoming = req.headers.get('x-webhook-secret')
-    if (incoming !== webhookSecret) {
-      return new Response('Unauthorized', { status: 401 })
-    }
+type PushMessage = {
+  to: string
+  title: string
+  body: string
+  data?: Record<string, string>
+  sound?: 'default'
+  badge?: number
+}
+
+async function sendExpoPush(messages: PushMessage[]): Promise<void> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'Accept-Encoding': 'gzip, deflate',
+  }
+  const token = Deno.env.get('EXPO_ACCESS_TOKEN')
+  if (token) headers['Authorization'] = `Bearer ${token}`
+
+  await fetch(EXPO_PUSH_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(messages),
+  })
+}
+
+Deno.serve(async (req) => {
+  // Verify webhook secret
+  const secret = Deno.env.get('WEBHOOK_SECRET')
+  if (secret && req.headers.get('x-webhook-secret') !== secret) {
+    return new Response('Unauthorized', { status: 401 })
   }
 
+  let payload: WebhookPayload
   try {
-    const { record } = await req.json() as { record: MessageRecord }
+    payload = await req.json()
+  } catch {
+    return new Response('Bad request', { status: 400 })
+  }
 
-    // Only send push when trainer is the sender (sender_id === trainer_id)
-    if (!record || record.sender_id !== record.trainer_id) {
-      return new Response('Not a trainer message', { status: 200 })
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+
+  const { table, type, record, old_record } = payload
+
+  // ── 1. New message from trainer ──────────────────────────────────────────
+  if (table === 'messages' && type === 'INSERT') {
+    // Only notify when trainer sends to client (not when client sends)
+    if (record.sender_id !== record.trainer_id) {
+      return new Response('Skipped: client message', { status: 200 })
     }
 
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
-    )
-
-    // Get client's Expo push token
     const { data: tokenRow } = await supabase
       .from('expo_push_tokens')
       .select('token')
       .eq('client_id', record.client_id)
       .single()
 
-    if (!tokenRow?.token) {
-      return new Response('No push token for client', { status: 200 })
-    }
+    if (!tokenRow?.token) return new Response('No token', { status: 200 })
 
-    // Get trainer's name for the notification title
-    const { data: trainerProfile } = await supabase
+    // Fetch trainer name for a personalised notification
+    const { data: trainer } = await supabase
       .from('profiles')
       .select('full_name')
       .eq('id', record.trainer_id)
       .single()
 
-    const trainerName = trainerProfile?.full_name ?? 'Tvoj trener'
-    const body = record.content.length > 80
-      ? record.content.slice(0, 77) + '...'
-      : record.content
+    const trainerName = trainer?.full_name ?? 'Trener'
+    const preview = (record.content as string)?.slice(0, 100) ?? ''
 
-    // Send Expo Push Notification
-    const response = await fetch(EXPO_PUSH_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
-      },
-      body: JSON.stringify({
-        to: tokenRow.token,
-        title: `💬 ${trainerName}`,
-        body,
-        data: { screen: 'chat' },
-        sound: 'default',
-        badge: 1,
-        priority: 'high',
-      }),
-    })
+    await sendExpoPush([{
+      to: tokenRow.token,
+      title: trainerName,
+      body: preview,
+      data: { screen: 'chat' },
+      sound: 'default',
+    }])
 
-    const result = await response.json()
-    return new Response(JSON.stringify(result), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
-  } catch (error) {
-    console.error('[send-client-push]', error)
-    return new Response(JSON.stringify({ error: String(error) }), { status: 500 })
+    return new Response('OK', { status: 200 })
   }
+
+  // ── 2. Trainer commented on a check-in ──────────────────────────────────
+  if (table === 'checkins' && type === 'UPDATE') {
+    const newComment = record.trainer_comment
+    const oldComment = old_record?.trainer_comment ?? null
+
+    // Only fire when a new comment is added (not on weight/value updates)
+    if (!newComment || newComment === oldComment) {
+      return new Response('Skipped: no new comment', { status: 200 })
+    }
+
+    const { data: tokenRow } = await supabase
+      .from('expo_push_tokens')
+      .select('token')
+      .eq('client_id', record.client_id)
+      .single()
+
+    if (!tokenRow?.token) return new Response('No token', { status: 200 })
+
+    const preview = (newComment as string).slice(0, 120)
+
+    await sendExpoPush([{
+      to: tokenRow.token,
+      title: 'Komentar na check-in',
+      body: preview,
+      data: { screen: 'checkin' },
+      sound: 'default',
+    }])
+
+    return new Response('OK', { status: 200 })
+  }
+
+  // ── 3. New package assigned ──────────────────────────────────────────────
+  if (table === 'client_packages' && type === 'INSERT') {
+    const { data: tokenRow } = await supabase
+      .from('expo_push_tokens')
+      .select('token')
+      .eq('client_id', record.client_id)
+      .single()
+
+    if (!tokenRow?.token) return new Response('No token', { status: 200 })
+
+    // Fetch package name if available
+    let pkgName = 'Novi paket'
+    if (record.package_id) {
+      const { data: pkg } = await supabase
+        .from('packages')
+        .select('name')
+        .eq('id', record.package_id)
+        .single()
+      if (pkg?.name) pkgName = pkg.name
+    }
+
+    await sendExpoPush([{
+      to: tokenRow.token,
+      title: 'Paket dodijeljen',
+      body: `Tvoj trener ti je dodijelio paket: ${pkgName}`,
+      data: { screen: 'package' },
+      sound: 'default',
+    }])
+
+    return new Response('OK', { status: 200 })
+  }
+
+  // ── 4. Manual trainer ping ───────────────────────────────────────────────
+  // Payload: { type: 'manual', client_id: '...', message: '...' }
+  if ((payload as any).type === 'manual') {
+    const { client_id, message } = payload as any
+
+    const { data: tokenRow } = await supabase
+      .from('expo_push_tokens')
+      .select('token')
+      .eq('client_id', client_id)
+      .single()
+
+    if (!tokenRow?.token) return new Response('No token', { status: 200 })
+
+    await sendExpoPush([{
+      to: tokenRow.token,
+      title: 'Obavijest od trenera',
+      body: message ?? 'Tvoj trener ti je poslao obavijest.',
+      data: { screen: 'checkin' },
+      sound: 'default',
+    }])
+
+    return new Response('OK', { status: 200 })
+  }
+
+  return new Response('Event not handled', { status: 200 })
 })

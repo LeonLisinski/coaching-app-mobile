@@ -2,7 +2,7 @@ import { supabase } from '@/lib/supabase'
 import { UnitLiftLogo } from '@/lib/UnitLiftLogo'
 import { useLanguage } from '@/lib/LanguageContext'
 import { Session } from '@supabase/supabase-js'
-import { Redirect } from 'expo-router'
+import { Redirect, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
@@ -23,6 +23,7 @@ import {
 type LoginState = 'idle' | 'loading' | 'success' | 'error'
 
 export default function LoginScreen() {
+  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loginState, setLoginState] = useState<LoginState>('idle')
@@ -213,6 +214,15 @@ export default function LoginScreen() {
                 </View>
               ) : null}
 
+              {/* Forgot password link */}
+              <TouchableOpacity
+                onPress={() => router.push('/(auth)/forgot-password')}
+                style={styles.forgotWrap}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.forgotText}>{t('login_forgot')}</Text>
+              </TouchableOpacity>
+
               {/* CTA button */}
               <TouchableOpacity
                 style={[styles.btn, isLoading && styles.btnLoading]}
@@ -328,5 +338,7 @@ const styles = StyleSheet.create({
   btnLoading: { opacity: 0.8 },
   btnText: { color: 'white', fontSize: 16, fontWeight: '800', letterSpacing: 0.2 },
 
+  forgotWrap: { alignSelf: 'flex-end', marginBottom: 16, marginTop: -4 },
+  forgotText: { fontSize: 13, color: INDIGO, fontWeight: '600' },
   helpText: { fontSize: 12, color: '#9ca3af', textAlign: 'center', lineHeight: 18 },
 })

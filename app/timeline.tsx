@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
@@ -44,10 +45,12 @@ type GroupedEvents = { monthKey: string; events: TimelineEvent[] }[]
 export default function TimelineScreen() {
   const { t } = useLanguage()
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const [loading, setLoading] = useState(true)
   const [groups, setGroups] = useState<GroupedEvents>([])
   const [totalEvents, setTotalEvents] = useState(0)
   const [activeFilter, setActiveFilter] = useState<EventType | 'all'>('all')
+  const [rawEvents, setRawEvents] = useState<TimelineEvent[]>([])
 
   const MONTH_NAMES = t('months').split(',')
   const monthLabel = (key: string) => {
@@ -57,13 +60,11 @@ export default function TimelineScreen() {
 
   useEffect(() => { fetchTimeline() }, [])
 
-  const fetchTimeline = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+  // Rebuild display groups whenever raw data or active filter changes
+  useEffect(() => { buildGroups(rawEvents, activeFilter) }, [rawEvents, activeFilter])
 
-    const { data: client } = await supabase
-      .from('clients').select('id, trainer_id')
-      .eq('user_id', user.id).single()
+  const fetchTimeline = async () => {
+    const client = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!client) { setLoading(false); return }
 
     const [
@@ -181,7 +182,7 @@ export default function TimelineScreen() {
 
     all.sort((a, b) => b.date.localeCompare(a.date))
     setTotalEvents(all.length)
-    buildGroups(all)
+    setRawEvents(all)
     setLoading(false)
   }
 
@@ -202,8 +203,7 @@ export default function TimelineScreen() {
 
   const handleFilter = (filter: EventType | 'all') => {
     setActiveFilter(filter)
-    // Re-run only client-side filtering — refetch not needed
-    // We need to store raw events for filtering
+    // useEffect above handles rebuilding groups whenever activeFilter changes
   }
 
   if (loading) {

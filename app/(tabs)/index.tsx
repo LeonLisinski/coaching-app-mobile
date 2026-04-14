@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { UnitLiftWordmark } from '@/lib/UnitLiftLogo'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { BarChart2, ClipboardCheck, Dumbbell, Salad } from 'lucide-react-native'
@@ -29,6 +30,7 @@ const getToday = () => {
 export default function HomeScreen() {
   const router = useRouter()
   const { t } = useLanguage()
+  const { clientData } = useClient()
   const DAYS_SHORT = t('days_short').split(',')
   const [profile, setProfile] = useState<Profile | null>(null)
   const [checkinConfig, setCheckinConfig] = useState<CheckinConfig | null>(null)
@@ -52,65 +54,80 @@ export default function HomeScreen() {
   const [savingTrainingDay, setSavingTrainingDay] = useState(false)
 
   const today = getToday()
-  const [userId, setUserId] = useState<string | null>(null)
 
-  useEffect(() => { fetchData() }, [])
+  // Re-run when clientData is populated (context may arrive after first render)
+  useEffect(() => { fetchData() }, [clientData?.clientId])
 
   // Refresh unread count every time Home comes into focus (e.g. after visiting Chat)
   useFocusEffect(
     useCallback(() => {
-      if (!clientId || !userId) return
+      if (!clientId || !clientData?.userId) return
       supabase
         .from('messages')
         .select('id', { count: 'exact', head: true })
         .eq('client_id', clientId)
         .eq('read', false)
-        .neq('sender_id', userId)
+        .neq('sender_id', clientData.userId)
         .then(({ count }) => setUnreadMessages(count ?? 0))
-    }, [clientId, userId]),
+    }, [clientId, clientData?.userId]),
   )
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
+    // Use shared ClientContext to avoid re-fetching the clients row on every tab focus
+    const cId = clientData?.clientId
+    const tId = clientData?.trainerId
+    const uid = clientData?.userId
+    if (!cId || !tId || !uid) { setLoading(false); return }
 
-    const [{ data: profileData }, { data: cData }] = await Promise.all([
-      supabase.from('profiles').select('full_name, email').eq('id', user.id).single(),
-      supabase.from('clients').select('id, trainer_id').eq('user_id', user.id).single(),
-    ])
-
-    if (profileData) setProfile(profileData)
-    if (!cData) return setLoading(false)
-
-    const cId = cData.id
-    const tId = cData.trainer_id
     setClientId(cId)
     setTrainerId(tId)
-    setUserId(user.id)
 
+    // Profile fetch (not in ClientContext — only needed here for greeting)
+    const { data: profileData } = await supabase
+      .from('profiles').select('full_name, email').eq('id', uid).single()
+    if (profileData) setProfile(profileData)
+
+    // Round 2: all remaining queries in parallel, using Supabase FK joins to
+    // eliminate the extra sequential rounds that previously fetched plan names.
     const [
-      { data: configData }, { data: checkinData },
-      { data: trainingData }, { data: nutritionData },
-      { data: messagesData }, { data: paramsData },
-      { data: dailyLogData }, { data: mealPlansData },
+      { data: configData },
+      { data: checkinData },
+      { data: wpData },       // workout plan with name via FK join
+      { data: mpData },       // meal plan with name + plan_type via FK join
+      { count: unreadCount },
+      { data: paramsData },
+      { data: dailyLogData },
     ] = await Promise.all([
       supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).single(),
       supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).single(),
-      supabase.from('client_workout_plans').select('id').eq('client_id', cId).eq('active', true).limit(1),
-      supabase.from('client_meal_plans').select('id').eq('client_id', cId).eq('active', true).limit(1),
-      supabase.from('messages').select('id').eq('client_id', cId).eq('read', false).neq('sender_id', user.id),
-      supabase.from('checkin_parameters').select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index'),
-      supabase.from('daily_logs').select('id, is_training_day, values').eq('client_id', cId).eq('date', today).single(),
-      supabase.from('client_meal_plans').select('plan_type').eq('client_id', cId).eq('active', true),
+      supabase.from('client_workout_plans')
+        .select('id, workout_plans(name)')
+        .eq('client_id', cId).eq('active', true).limit(1).single(),
+      supabase.from('client_meal_plans')
+        .select('id, plan_type, meal_plans(name)')
+        .eq('client_id', cId).eq('active', true),
+      supabase.from('messages')
+        .select('id', { count: 'exact', head: true })
+        .eq('client_id', cId).eq('read', false).neq('sender_id', uid),
+      supabase.from('checkin_parameters')
+        .select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index'),
+      supabase.from('daily_logs')
+        .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).single(),
     ])
 
     if (configData) setCheckinConfig(configData)
     setTodayCheckin(checkinData)
-    setHasTraining((trainingData?.length ?? 0) > 0)
-    setHasNutrition((nutritionData?.length ?? 0) > 0)
+    setHasTraining(!!wpData?.id)
+    setHasNutrition((mpData?.length ?? 0) > 0)
 
-    const hasTypedPlans = mealPlansData?.some(
-      p => p.plan_type === 'training_day' || p.plan_type === 'rest_day'
+    const wpName = (wpData?.workout_plans as any)?.name ?? null
+    if (wpName) setTrainingPlanName(wpName)
+
+    const mpName = (mpData?.[0]?.meal_plans as any)?.name ?? null
+    if (mpName) setNutritionPlanName(mpName)
+
+    const hasTypedPlans = mpData?.some(
+      (p: any) => p.plan_type === 'training_day' || p.plan_type === 'rest_day'
     ) ?? false
     setHasTrainingDayPlan(hasTypedPlans)
 
@@ -119,49 +136,16 @@ export default function HomeScreen() {
       setIsTrainingDay(dailyLogData.is_training_day ?? null)
     }
 
-    setUnreadMessages(messagesData?.length ?? 0)
+    setUnreadMessages(unreadCount ?? 0)
+    setLoading(false)
 
-    const { data: wpData } = await supabase
-      .from('client_workout_plans').select('workout_plan_id')
-      .eq('client_id', cId).eq('active', true).limit(1).single()
-    if (wpData?.workout_plan_id) {
-      const { data: planData } = await supabase
-        .from('workout_plans').select('name, days').eq('id', wpData.workout_plan_id).single()
-      if (planData) {
-        if (planData.name) setTrainingPlanName(planData.name)
-        if (planData.days) {
-          const weekStart = (() => {
-            const now = new Date(); const day = now.getDay()
-            const diff = day === 0 ? -6 : 1 - day
-            const mon = new Date(now); mon.setDate(now.getDate() + diff); mon.setHours(0,0,0,0)
-            return mon.toISOString().split('T')[0]
-          })()
-          const { data: weekLogs } = await supabase.from('workout_logs')
-            .select('day_name').eq('client_id', cId).gte('date', weekStart)
-          const doneNames = new Set(weekLogs?.map((l: any) => l.day_name) || [])
-          const next = planData.days.find((d: any) => !doneNames.has(d.name)) || planData.days[0]
-          void next // next training day no longer shown in stat row
-        }
-      }
-    }
-
-    // Nutrition plan name
-    const { data: mpAssigned } = await supabase
-      .from('client_meal_plans').select('meal_plan_id')
-      .eq('client_id', cId).eq('active', true).limit(1).single()
-    if (mpAssigned?.meal_plan_id) {
-      const { data: mpNameData } = await supabase
-        .from('meal_plans').select('name').eq('id', mpAssigned.meal_plan_id).single()
-      if (mpNameData?.name) setNutritionPlanName(mpNameData.name)
-    }
-
+    // Load chart data after main UI is visible — deferred so the screen renders
+    // without waiting for chart queries.
     if (paramsData && paramsData.length > 0) {
       setCheckinParams(paramsData)
       setSelectedParam(paramsData[0])
-      await loadChartData(cId, paramsData[0])
+      loadChartData(cId, paramsData[0]) // intentionally not awaited
     }
-
-    setLoading(false)
   }
 
   const handleTrainingDayAnswer = async (answer: boolean) => {
@@ -184,9 +168,10 @@ export default function HomeScreen() {
 
   const loadChartData = async (cId: string, param: CheckinParam) => {
     const [{ data: dailyData }, { data: weeklyData }] = await Promise.all([
-      supabase.from('daily_logs').select('date, values').eq('client_id', cId).order('date', { ascending: true }).limit(20),
-      supabase.from('checkins').select('date, values').eq('client_id', cId).order('date', { ascending: true }).limit(20),
+      supabase.from('daily_logs').select('date, values').eq('client_id', cId).order('date', { ascending: false }).limit(20),
+      supabase.from('checkins').select('date, values').eq('client_id', cId).order('date', { ascending: false }).limit(20),
     ])
+    // Fetch descending (newest first), filter, then reverse to chronological order for the chart
     const toPoints = (rows: any[] | null): ChartPoint[] =>
       (rows || [])
         .filter(r => r.values?.[param.id] !== undefined && r.values?.[param.id] !== null && r.values?.[param.id] !== '')
@@ -196,6 +181,7 @@ export default function HomeScreen() {
           date: r.date,
         }))
         .filter(p => !isNaN(p.value))
+        .reverse()
     const dailyPoints = toPoints(dailyData)
     const weeklyPoints = toPoints(weeklyData)
     setChartData((dailyPoints.length >= weeklyPoints.length ? dailyPoints : weeklyPoints).slice(-12))

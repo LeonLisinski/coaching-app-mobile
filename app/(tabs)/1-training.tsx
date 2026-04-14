@@ -1,9 +1,11 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useNavigation, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import {
-  ActivityIndicator, Alert, Animated, Keyboard, KeyboardAvoidingView, Linking, Modal,
+  ActivityIndicator, Alert, Animated, AppState, Keyboard, KeyboardAvoidingView, Linking, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native'
 
@@ -72,25 +74,54 @@ const getWeekEnd = () => {
 }
 
 // ── Rest Timer ────────────────────────────────────────────────────────────────
-function RestTimer({ seconds, onDone }: { seconds: number; onDone: () => void }) {
+function RestTimer({ seconds, endsAt, onDone }: { seconds: number; endsAt: number; onDone: () => void }) {
   const { t } = useLanguage()
-  const [remaining, setRemaining] = useState(seconds)
-  const progress = useRef(new Animated.Value(1)).current
+  const initialRemaining = Math.max(0, Math.round((endsAt - Date.now()) / 1000))
+  const [remaining, setRemaining] = useState(initialRemaining)
+  const progress = useRef(new Animated.Value(initialRemaining / seconds)).current
+  const endTimeRef = useRef(endsAt)
+  const appStateRef = useRef(AppState.currentState)
+  const animRef = useRef<Animated.CompositeAnimation | null>(null)
+
+  const startAnimation = (durationMs: number) => {
+    animRef.current?.stop()
+    progress.setValue(durationMs / (seconds * 1000))
+    animRef.current = Animated.timing(progress, {
+      toValue: 0,
+      duration: durationMs,
+      useNativeDriver: false,
+    })
+    animRef.current.start()
+  }
 
   useEffect(() => {
-    Animated.timing(progress, {
-      toValue: 0,
-      duration: seconds * 1000,
-      useNativeDriver: false,
-    }).start()
+    if (initialRemaining <= 0) { onDone(); return }
+    startAnimation(initialRemaining * 1000)
 
     const interval = setInterval(() => {
-      setRemaining(r => {
-        if (r <= 1) { clearInterval(interval); onDone(); return 0 }
-        return r - 1
-      })
-    }, 1000)
-    return () => clearInterval(interval)
+      const rem = Math.max(0, Math.round((endTimeRef.current - Date.now()) / 1000))
+      setRemaining(rem)
+      if (rem <= 0) { clearInterval(interval); onDone() }
+    }, 500)
+
+    const appStateSub = AppState.addEventListener('change', nextState => {
+      if (appStateRef.current.match(/inactive|background/) && nextState === 'active') {
+        const rem = Math.max(0, Math.round((endTimeRef.current - Date.now()) / 1000))
+        if (rem <= 0) {
+          onDone()
+        } else {
+          setRemaining(rem)
+          startAnimation(rem * 1000)
+        }
+      }
+      appStateRef.current = nextState
+    })
+
+    return () => {
+      clearInterval(interval)
+      appStateSub.remove()
+      animRef.current?.stop()
+    }
   }, [])
 
   const barWidth = progress.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] })
@@ -348,6 +379,7 @@ export default function TrainingScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { t, lang } = useLanguage()
+  const { clientData: ctxClient } = useClient()
   const locale = lang === 'en' ? 'en' : 'hr'
   const [plan, setPlan] = useState<WorkoutPlan | null>(null)
   const [loading, setLoading] = useState(true)
@@ -359,7 +391,9 @@ export default function TrainingScreen() {
   const [saved, setSaved] = useState(false)
 
   // Timer
-  const [restTimer, setRestTimer] = useState<{ exerciseId: string; seconds: number } | null>(null)
+  const [restTimer, setRestTimer] = useState<{ exerciseId: string; seconds: number; endsAt: number } | null>(null)
+  // Tracks whether this screen is currently focused (reliable alternative to navigation.isFocused())
+  const isScreenFocused = useRef(false)
   // Detail modal
   const [detailExercise, setDetailExercise] = useState<PlanExercise | null>(null)
   // Finish confirm
@@ -368,60 +402,91 @@ export default function TrainingScreen() {
   const [showUpdate, setShowUpdate] = useState(false)
   const [savedLogs, setSavedLogs] = useState<ExerciseLog[]>([])
   const [existingLogId, setExistingLogId] = useState<string | null>(null)
+  // True when re-opening an already-completed workout for editing (vs a brand new session)
+  const [isEditingExisting, setIsEditingExisting] = useState(false)
 
   useEffect(() => { fetchPlan() }, [])
 
-  // Tap on the training tab when already on it → go back to plan overview
+  // Auto-save workout draft when navigating away (blur) — only if workout in progress and not saved
+  useEffect(() => {
+    const today = new Date().toISOString().split('T')[0]
+    const unsub = (navigation as any).addListener('blur', () => {
+      if (!plan || !activeDay || exerciseLogs.length === 0 || saved || existingLogId) return
+      const hasAnyInput = exerciseLogs.some(ex => ex.sets.some(s => s.reps || s.weight || s.completed))
+      if (!hasAnyInput) return
+      const key = `training-draft-${plan.client_id}-${today}-${activeDay.name}`
+      AsyncStorage.setItem(key, JSON.stringify(exerciseLogs)).catch(() => {})
+    })
+    return unsub
+  }, [navigation, plan, activeDay, exerciseLogs, saved, existingLogId])
+
+  // Real-time draft save — persists to AsyncStorage whenever exerciseLogs changes and
+  // there is at least one completed or filled set (protects against accidental logout / crash).
+  // All guard values are in the dep array to prevent stale-closure reads.
+  useEffect(() => {
+    if (!plan || !activeDay || saved || existingLogId || exerciseLogs.length === 0) return
+    const hasAnyInput = exerciseLogs.some(ex => ex.sets.some(s => s.completed || s.reps || s.weight))
+    if (!hasAnyInput) return
+    const today = new Date().toISOString().split('T')[0]
+    const key = `training-draft-${plan.client_id}-${today}-${activeDay.name}`
+    AsyncStorage.setItem(key, JSON.stringify(exerciseLogs)).catch(() => {})
+  }, [exerciseLogs, plan, activeDay, saved, existingLogId])
+
+  // Track real screen focus via focus/blur events (more reliable than isFocused() at tabPress time)
+  useEffect(() => {
+    const unsubFocus = (navigation as any).addListener('focus', () => { isScreenFocused.current = true })
+    const unsubBlur  = (navigation as any).addListener('blur',  () => { isScreenFocused.current = false })
+    return () => { unsubFocus(); unsubBlur() }
+  }, [navigation])
+
+  // Tap on the training tab while already on it → go back to plan overview.
+  // isScreenFocused.current is false when arriving from another tab, so the workout is preserved.
   useEffect(() => {
     const unsub = (navigation as any).addListener('tabPress', () => {
-      if (activeDay) {
+      if (activeDay && isScreenFocused.current) {
         setActiveDay(null)
         setExerciseLogs([])
+        setRestTimer(null)
         setSaved(false)
         setShowFinish(false)
         setExistingLogId(null)
+        setIsEditingExisting(false)
       }
     })
     return unsub
   }, [navigation, activeDay])
 
   const fetchPlan = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data: clientData } = await supabase
-      .from('clients').select('id, trainer_id').eq('user_id', user.id).single()
+    // Use shared ClientContext — avoids a redundant clients fetch
+    const clientData = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!clientData) return setLoading(false)
 
-    const { data: assigned } = await supabase
-      .from('client_workout_plans')
-      .select('workout_plan_id, assigned_at, notes, days')
-      .eq('client_id', clientData.id)
-      .eq('active', true)
-      .order('assigned_at', { ascending: false })
-      .limit(1)
-      .single()
+    // Assigned plan (with FK join to workout_plans) + week logs in parallel
+    const [{ data: assigned }, { data: weekLogs }] = await Promise.all([
+      supabase
+        .from('client_workout_plans')
+        .select('workout_plan_id, assigned_at, notes, days, workout_plans(id, name, description, days)')
+        .eq('client_id', clientData.id)
+        .eq('active', true)
+        .order('assigned_at', { ascending: false })
+        .limit(1)
+        .single(),
+      supabase
+        .from('workout_logs').select('day_name, date')
+        .eq('client_id', clientData.id)
+        .gte('date', getWeekStart()).lte('date', getWeekEnd()),
+    ])
 
     if (!assigned) return setLoading(false)
-
-    const { data: planData } = await supabase
-      .from('workout_plans').select('id, name, description, days')
-      .eq('id', assigned.workout_plan_id).single()
-
+    const planData = assigned.workout_plans as any
     if (!planData) return setLoading(false)
 
-    // client_workout_plans.days is a per-client override (set via edit-plan-dialog);
-    // if present it takes precedence over workout_plans.days
+    // client_workout_plans.days is a per-client override; if present it takes precedence
     const effectiveDays = (assigned.days && (assigned.days as PlanDay[]).length > 0)
       ? assigned.days as PlanDay[]
       : planData.days || []
 
-    const { data: weekLogs } = await supabase
-      .from('workout_logs').select('day_name, date')
-      .eq('client_id', clientData.id).eq('plan_id', planData.id)
-      .gte('date', getWeekStart()).lte('date', getWeekEnd())
-
-    setCompletedThisWeek(weekLogs?.map(l => l.day_name) || [])
+    setCompletedThisWeek(weekLogs?.map((l: any) => l.day_name) || [])
     setPlan({
       id: planData.id, name: planData.name, description: planData.description,
       days: effectiveDays, assigned_at: assigned.assigned_at,
@@ -433,6 +498,7 @@ export default function TrainingScreen() {
   const openDay = async (day: PlanDay) => {
     setSaved(false)
     setExistingLogId(null)
+    setIsEditingExisting(false)
 
     if (!plan) return
 
@@ -459,35 +525,72 @@ export default function TrainingScreen() {
 
     setActiveDay(enrichedDay)
 
-    const logs: ExerciseLog[] = enrichedDay.exercises.map(ex => ({
+    const baseLogs: ExerciseLog[] = enrichedDay.exercises.map(ex => ({
       exercise_id: ex.exercise_id,
       name: ex.name,
       sets: Array.from({ length: ex.sets }, (_, i) => ({
         set_number: i + 1, reps: '', weight: '', completed: false,
       }))
     }))
-    setExerciseLogs(logs)
+    setExerciseLogs(baseLogs)
 
+    const today = new Date().toISOString().split('T')[0]
+    const weekStart = getWeekStart()
+
+    // Fetch the 2 most recent logs: index 0 = this week (if any), index 1 = previous reference
     const { data: prevLogs } = await supabase
       .from('workout_logs').select('id, exercises, date')
       .eq('client_id', plan.client_id).eq('plan_id', plan.id).eq('day_name', day.name)
-      .order('date', { ascending: false }).limit(1)
+      .order('date', { ascending: false }).limit(2)
 
-    if (prevLogs && prevLogs.length > 0) {
+    const thisWeekLog = prevLogs?.find(l => l.date >= weekStart) ?? null
+    const referenceLog = prevLogs?.find(l => l.date < weekStart) ?? prevLogs?.[0] ?? null
+
+    // "Last session" reference: prefer a log from a PREVIOUS week so it's useful while editing
+    if (referenceLog) {
       const lastMap: Record<string, LastLog> = {}
-      const prevExercises: ExerciseLog[] = prevLogs[0].exercises || []
-      prevExercises.forEach(ex => {
-        lastMap[ex.exercise_id] = { exercise_id: ex.exercise_id, sets: ex.sets, date: prevLogs[0].date }
+      const refExercises: ExerciseLog[] = referenceLog.exercises || []
+      refExercises.forEach(ex => {
+        lastMap[ex.exercise_id] = { exercise_id: ex.exercise_id, sets: ex.sets, date: referenceLog.date }
       })
       setLastLogs(lastMap)
-
-      // If today's log exists, store its id for potential update
-      if (prevLogs[0].date === new Date().toISOString().split('T')[0]) {
-        setExistingLogId(prevLogs[0].id)
-        setSavedLogs(prevExercises)
-      }
     } else {
       setLastLogs({})
+    }
+
+    if (thisWeekLog) {
+      // Editing an existing log from this week — pre-fill inputs with saved values
+      setExistingLogId(thisWeekLog.id)
+      setIsEditingExisting(true)
+      const savedExercises: ExerciseLog[] = thisWeekLog.exercises || []
+      setSavedLogs(savedExercises)
+
+      // Merge saved data with current plan structure (handles exercises added/removed since last save)
+      const mergedLogs: ExerciseLog[] = enrichedDay.exercises.map(planEx => {
+        const saved = savedExercises.find(s => s.exercise_id === planEx.exercise_id)
+        if (saved) return { ...saved, name: planEx.name }
+        return {
+          exercise_id: planEx.exercise_id, name: planEx.name,
+          sets: Array.from({ length: planEx.sets }, (_, i) => ({
+            set_number: i + 1, reps: '', weight: '', completed: false,
+          }))
+        }
+      })
+      setExerciseLogs(mergedLogs)
+    } else {
+      // Fresh workout this week — try to restore a draft
+      try {
+        const key = `training-draft-${plan.client_id}-${today}-${day.name}`
+        const raw = await AsyncStorage.getItem(key)
+        if (raw) {
+          const draftLogs: ExerciseLog[] = JSON.parse(raw)
+          setExerciseLogs(baseLogs.map(ex => {
+            const d = draftLogs.find(dl => dl.exercise_id === ex.exercise_id)
+            if (!d) return ex
+            return { ...ex, sets: ex.sets.map((s, i) => ({ ...s, ...d.sets[i] })) }
+          }))
+        }
+      } catch {}
     }
   }
 
@@ -510,7 +613,7 @@ export default function TrainingScreen() {
         Keyboard.dismiss()
         const planEx = activeDay?.exercises.find(e => e.exercise_id === exerciseId)
         if (planEx?.rest_seconds) {
-          setRestTimer({ exerciseId, seconds: planEx.rest_seconds })
+          setRestTimer({ exerciseId, seconds: planEx.rest_seconds, endsAt: Date.now() + planEx.rest_seconds * 1000 })
         }
       }
 
@@ -524,9 +627,14 @@ export default function TrainingScreen() {
 
     const today = new Date().toISOString().split('T')[0]
 
-    // If a log already exists today — update it instead of inserting
+    // If a log already exists — update it instead of inserting
     if (existingLogId) {
-      await supabase.from('workout_logs').update({ exercises: exerciseLogs }).eq('id', existingLogId)
+      const { error: updateErr } = await supabase.from('workout_logs').update({ exercises: exerciseLogs }).eq('id', existingLogId)
+      if (updateErr) {
+        Alert.alert('Greška', updateErr.message)
+        setSaving(false)
+        return
+      }
     } else {
       const { error } = await supabase.from('workout_logs').insert({
         client_id: plan.client_id, trainer_id: plan.trainer_id,
@@ -545,6 +653,11 @@ export default function TrainingScreen() {
     setCompletedThisWeek(prev =>
       prev.includes(activeDay.name) ? prev : [...prev, activeDay.name]
     )
+    // Clear draft after successful save
+    if (plan) {
+      const today = new Date().toISOString().split('T')[0]
+      AsyncStorage.removeItem(`training-draft-${plan.client_id}-${today}-${activeDay.name}`).catch(() => {})
+    }
     setSaving(false)
   }
 
@@ -691,6 +804,7 @@ export default function TrainingScreen() {
         {restTimer && (
           <RestTimer
             seconds={restTimer.seconds}
+            endsAt={restTimer.endsAt}
             onDone={() => setRestTimer(null)}
           />
         )}
@@ -699,19 +813,21 @@ export default function TrainingScreen() {
         <View style={styles.saveBar}>
           {saved ? (
             <View style={styles.savedBar}>
-              <Text style={styles.savedText}>{t('train_saved')}</Text>
+              <Text style={styles.savedText}>
+                {isEditingExisting ? t('train_updated') : t('train_saved')}
+              </Text>
               <TouchableOpacity onPress={() => setShowUpdate(true)} style={styles.updateBtn}>
                 <Text style={styles.updateBtnText}>{t('train_update_values')}</Text>
               </TouchableOpacity>
             </View>
           ) : (
             <TouchableOpacity
-              style={styles.saveBtn}
+              style={[styles.saveBtn, isEditingExisting && { backgroundColor: '#6366f1' }]}
               onPress={() => setShowFinish(true)}
               disabled={saving}
             >
               <Text style={styles.saveBtnText}>
-                {saving ? t('train_saving') : t('train_finish')}
+                {saving ? t('train_saving') : isEditingExisting ? t('train_save_changes') : t('train_finish')}
               </Text>
             </TouchableOpacity>
           )}
@@ -822,7 +938,14 @@ export default function TrainingScreen() {
                 </Text>
               </View>
             </View>
-            {isDone ? <Text style={styles.dayDoneCheck}>✓</Text> : <Text style={styles.dayArrow}>→</Text>}
+            {isDone ? (
+              <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                <Text style={styles.dayDoneCheck}>✓</Text>
+                <Text style={{ fontSize: 10, color: '#9ca3af', fontWeight: '600' }}>{t('train_edit_hint')}</Text>
+              </View>
+            ) : (
+              <Text style={styles.dayArrow}>→</Text>
+            )}
           </TouchableOpacity>
         )
       })}

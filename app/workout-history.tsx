@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -468,7 +469,7 @@ function VolumeChart({ points, color = '#3b82f6' }: { points: VolumePoint[]; col
           const y = BAR_CHART_H - barH
           return (
             <Rect
-              key={p.date}
+              key={`bar-${i}-${p.date}`}
               x={x}
               y={y}
               width={barW}
@@ -486,7 +487,7 @@ function VolumeChart({ points, color = '#3b82f6' }: { points: VolumePoint[]; col
           const x = i * (barW + 3) + 20 + barW / 2
           return (
             <SvgText
-              key={`lbl-${p.date}`}
+              key={`lbl-${i}-${p.date}`}
               x={x}
               y={BAR_CHART_H + 18}
               fontSize={9}
@@ -639,6 +640,7 @@ export default function WorkoutHistoryScreen() {
   const { t, lang } = useLanguage()
   const locale = lang === 'en' ? 'en' : 'hr'
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const [loading, setLoading] = useState(true)
   const [groups, setGroups] = useState<DayGroup[]>([])
   const [totalSessions, setTotalSessions] = useState(0)
@@ -648,12 +650,7 @@ export default function WorkoutHistoryScreen() {
   useEffect(() => { fetchData() }, [])
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data: client } = await supabase
-      .from('clients').select('id, trainer_id')
-      .eq('user_id', user.id).single()
+    const client = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!client) { setLoading(false); return }
 
     const { data: logs } = await supabase

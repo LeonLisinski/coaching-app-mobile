@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
@@ -67,6 +68,7 @@ function getStatusConfig(status: string, t: (k: any) => string): { label: string
 export default function PackageScreen() {
   const { t } = useLanguage()
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const [loading, setLoading] = useState(true)
   const [activePackage, setActivePackage] = useState<ClientPackage | null>(null)
   const [history, setHistory] = useState<ClientPackage[]>([])
@@ -74,12 +76,7 @@ export default function PackageScreen() {
   useEffect(() => { fetchData() }, [])
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data: client } = await supabase
-      .from('clients').select('id, trainer_id')
-      .eq('user_id', user.id).single()
+    const client = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!client) { setLoading(false); return }
 
     // Step 1: get basic client_packages rows (no join — avoids RLS issues on packages table)

@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { Image } from 'expo-image'
 import { useRouter } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
@@ -425,6 +426,7 @@ type FilterMode = 'all' | 'comments' | 'photos'
 export default function CheckinHistoryScreen() {
   const { t } = useLanguage()
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const [loading, setLoading] = useState(true)
   const [checkins, setCheckins] = useState<CheckinEntry[]>([])
   const [params, setParams] = useState<Parameter[]>([])
@@ -463,28 +465,30 @@ export default function CheckinHistoryScreen() {
   }
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data: client } = await supabase
-      .from('clients').select('id, trainer_id')
-      .eq('user_id', user.id).single()
+    const client = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!client) { setLoading(false); return }
 
     const [{ data: checkinData }, { data: paramData }] = await Promise.all([
       supabase.from('checkins')
         .select('id, date, values, photo_urls, trainer_comment')
         .eq('client_id', client.id)
-        .order('date', { ascending: false }),
+        .order('date', { ascending: false })
+        .limit(60),  // cap initial load; most clients won't have more than a year of weekly check-ins
       supabase.from('checkin_parameters')
         .select('id, name, type, unit, order_index')
         .eq('trainer_id', client.trainer_id)
         .order('order_index'),
     ])
 
-    if (checkinData) setCheckins(await resolvePhotoUrls(checkinData))
+    // Show the list immediately, then resolve photo signed URLs in background
+    if (checkinData) {
+      setCheckins(checkinData)
+      setLoading(false)
+      resolvePhotoUrls(checkinData).then(resolved => setCheckins(resolved))
+    } else {
+      setLoading(false)
+    }
     if (paramData) setParams(paramData)
-    setLoading(false)
   }
 
   const toggleSelect = (id: string) => {

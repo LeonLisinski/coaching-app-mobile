@@ -1,3 +1,4 @@
+import * as Linking from 'expo-linking'
 import * as Notifications from 'expo-notifications'
 import { Stack, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
@@ -5,6 +6,7 @@ import { ActivityIndicator, View } from 'react-native'
 import { registerForPushNotificationsAsync } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 import { LanguageProvider } from '@/lib/LanguageContext'
+import { ClientProvider } from '@/lib/ClientContext'
 import { Session } from '@supabase/supabase-js'
 
 export default function RootLayout() {
@@ -15,22 +17,62 @@ export default function RootLayout() {
   const responseListener = useRef<Notifications.EventSubscription | null>(null)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setLoading(false)
-    })
+    // Safety timeout — if getSession() never resolves (e.g. cold-start network error),
+    // force loading=false after 6s so the user isn't stuck on a spinner forever
+    const timeout = setTimeout(() => setLoading(false), 6000)
+
+    supabase.auth.getSession()
+      .then(async ({ data: { session } }) => {
+        setSession(session)
+        // Register push token on cold start if user is already logged in
+        if (session) {
+          const { data: client } = await supabase
+            .from('clients').select('id').eq('user_id', session.user.id).single()
+          if (client) registerForPushNotificationsAsync(client.id)
+        }
+      })
+      .catch(() => {
+        // session stays null — user will be redirected to login
+      })
+      .finally(() => {
+        clearTimeout(timeout)
+        setLoading(false)
+      })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       setSession(session)
+      // Re-register on every login (token may have rotated)
       if (session) {
         const { data: client } = await supabase
-          .from('clients')
-          .select('id')
-          .eq('user_id', session.user.id)
-          .single()
+          .from('clients').select('id').eq('user_id', session.user.id).single()
         if (client) registerForPushNotificationsAsync(client.id)
       }
     })
+
+    // ── Deep link handler: password reset & invite links ──────────────────────
+    // Supabase auth emails contain: unitlift://set-password#access_token=...&type=recovery
+    // or unitlift://set-password#access_token=...&type=invite
+    const handleDeepLink = async (url: string) => {
+      if (!url.includes('set-password') && !url.includes('access_token')) return
+
+      // Extract the fragment (hash) part of the URL and parse it as query params
+      const hash = url.split('#')[1] ?? url.split('?')[1] ?? ''
+      const params = Object.fromEntries(hash.split('&').map(p => p.split('=')))
+
+      const { access_token, refresh_token, type } = params
+      if (!access_token || !refresh_token) return
+
+      if (type === 'recovery' || type === 'invite' || type === 'magiclink') {
+        // Establish the session from the link tokens
+        const { error } = await supabase.auth.setSession({ access_token, refresh_token })
+        if (!error) router.replace('/(auth)/set-password')
+      }
+    }
+
+    // Handle link that opened the app (cold start)
+    Linking.getInitialURL().then(url => { if (url) handleDeepLink(url) })
+    // Handle link while app is already open (warm start)
+    const linkSub = Linking.addEventListener('url', ({ url }) => handleDeepLink(url))
 
     // Notification received while app is open — can be used to show in-app banner
     notifListener.current = Notifications.addNotificationReceivedListener(() => {})
@@ -40,10 +82,12 @@ export default function RootLayout() {
       const screen = response.notification.request.content.data?.screen as string | undefined
       if (screen === 'chat') router.push('/(tabs)/4-chat')
       else if (screen === 'checkin') router.push('/(tabs)/5-checkin')
+      else if (screen === 'package') router.push('/package')
     })
 
     return () => {
       subscription.unsubscribe()
+      linkSub.remove()
       notifListener.current?.remove()
       responseListener.current?.remove()
     }
@@ -58,10 +102,13 @@ export default function RootLayout() {
   }
 
   return (
+    <ClientProvider>
     <LanguageProvider>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="(auth)/login" />
+        <Stack.Screen name="(auth)/forgot-password" options={{ animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="(auth)/set-password" options={{ animation: 'slide_from_bottom', gestureEnabled: false }} />
         <Stack.Screen name="checkin-history" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="compare-photos" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="workout-history" options={{ animation: 'slide_from_right' }} />
@@ -72,5 +119,6 @@ export default function RootLayout() {
         <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </LanguageProvider>
+    </ClientProvider>
   )
 }

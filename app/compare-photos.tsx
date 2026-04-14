@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
@@ -31,6 +32,7 @@ function formatDate(dateStr: string): string {
 export default function ComparePhotosScreen() {
   const { t } = useLanguage()
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const { ids } = useLocalSearchParams<{ ids: string }>()
   const [loading, setLoading] = useState(true)
   const [checkins, setCheckins] = useState<CheckinData[]>([])
@@ -59,9 +61,7 @@ export default function ComparePhotosScreen() {
   }
 
   const fetchCheckins = async (idList: string[]) => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) { setLoading(false); return }
-    const { data: clientData } = await supabase.from('clients').select('id').eq('user_id', user.id).single()
+    const clientData = ctxClient ? { id: ctxClient.clientId } : null
     if (!clientData) { setLoading(false); return }
 
     const { data } = await supabase

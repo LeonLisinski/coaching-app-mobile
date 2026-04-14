@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
+import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
@@ -73,11 +74,12 @@ function fmtLabel(dateStr: string, mode: GroupMode): string {
 }
 
 // ── Mini SVG Chart ────────────────────────────────────────────────────────────
-function ParamChart({ param, points, color, gradId }: {
+function ParamChart({ param, points, color, gradId, group = 'Dnevno' }: {
   param: Parameter
   points: RawPoint[]
   color: string
   gradId: string
+  group?: GroupMode
 }) {
   if (points.length === 0) return (
     <View style={chartStyles.noData}>
@@ -185,7 +187,7 @@ function ParamChart({ param, points, color, gradId }: {
             key={i}
             style={[chartStyles.xLabel, { flex: 1, opacity: showLabel(i) ? 1 : 0 }]}
           >
-            {fmtLabel(p.date, 'Dnevno')}
+            {fmtLabel(p.date, group)}
           </Text>
         ))}
       </View>
@@ -274,7 +276,7 @@ function ParamCard({ param, allPoints, range, group, colorIndex }: {
         )}
         <Text style={paramCardStyles.count}>{grouped.length} unosa</Text>
       </View>
-      <ParamChart param={param} points={grouped} color={color} gradId={gradId} />
+      <ParamChart param={param} points={grouped} color={color} gradId={gradId} group={group} />
     </View>
   )
 }
@@ -298,6 +300,7 @@ const paramCardStyles = StyleSheet.create({
 export default function MetricsScreen() {
   const { t } = useLanguage()
   const router = useRouter()
+  const { clientData: ctxClient } = useClient()
   const [loading, setLoading] = useState(true)
   const [params, setParams] = useState<Parameter[]>([])
   const [rawData, setRawData] = useState<Record<string, RawPoint[]>>({})
@@ -307,12 +310,7 @@ export default function MetricsScreen() {
   useEffect(() => { fetchData() }, [])
 
   const fetchData = async () => {
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) return
-
-    const { data: client } = await supabase
-      .from('clients').select('id, trainer_id')
-      .eq('user_id', user.id).single()
+    const client = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!client) { setLoading(false); return }
 
     const [{ data: paramData }, { data: checkinData }, { data: dailyData }] = await Promise.all([
@@ -324,11 +322,13 @@ export default function MetricsScreen() {
       supabase.from('checkins')
         .select('date, values')
         .eq('client_id', client.id)
-        .order('date', { ascending: true }),
+        .order('date', { ascending: true })
+        .limit(365),
       supabase.from('daily_logs')
         .select('date, values')
         .eq('client_id', client.id)
-        .order('date', { ascending: true }),
+        .order('date', { ascending: true })
+        .limit(365),
     ])
 
     if (!paramData) { setLoading(false); return }

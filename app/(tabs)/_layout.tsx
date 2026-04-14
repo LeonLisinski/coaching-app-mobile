@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+import { useClient } from '@/lib/ClientContext'
 import { Tabs, useRouter } from 'expo-router'
 import { ClipboardCheck, Dumbbell, Home, MessageCircle, Salad } from 'lucide-react-native'
 import { useEffect, useState } from 'react'
@@ -8,6 +9,7 @@ type AccessStatus = 'loading' | 'ok' | 'inactive_client' | 'inactive_trainer'
 
 export default function TabsLayout() {
   const router = useRouter()
+  const { setClientData } = useClient()
   const [unreadCount, setUnreadCount] = useState(0)
   const [clientId, setClientId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
@@ -16,7 +18,7 @@ export default function TabsLayout() {
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { setAccessStatus('ok'); return }
+      if (!user) { router.replace('/(auth)/login'); return }
       setUserId(user.id)
 
       // Fetch client record
@@ -31,25 +33,27 @@ export default function TabsLayout() {
         return
       }
 
-      // Check trainer's subscription via SECURITY DEFINER RPC (bypasses RLS)
-      const { data: trainerActive } = await supabase
-        .rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id })
+      // RPC (subscription check) and unread count don't depend on each other — run in parallel
+      const [{ data: trainerActive }, { count }] = await Promise.all([
+        supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }),
+        supabase
+          .from('messages')
+          .select('*', { count: 'exact', head: true })
+          .eq('client_id', client.id)
+          .eq('read', false)
+          .neq('sender_id', user.id),
+      ])
 
-      if (trainerActive === false) {
+      if (trainerActive !== true) {
         setAccessStatus('inactive_trainer')
         return
       }
 
       setClientId(client.id)
       setAccessStatus('ok')
-
-      const { count } = await supabase
-        .from('messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('client_id', client.id)
-        .eq('read', false)
-        .neq('sender_id', user.id)
       setUnreadCount(count ?? 0)
+      // Populate shared context so all screens can skip their own clients fetch
+      setClientData({ clientId: client.id, trainerId: client.trainer_id, userId: user.id })
     }
     init()
   }, [])
