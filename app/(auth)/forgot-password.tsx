@@ -20,11 +20,16 @@ export default function ForgotPasswordScreen() {
     if (!trimmed) { setError(t('login_err_fields')); return }
     setLoading(true)
     setError('')
-    const { error: err } = await supabase.auth.resetPasswordForEmail(trimmed, {
-      redirectTo: 'unitlift://set-password',
+    // Custom Resend email + client-auth link (not the trainer Supabase template).
+    const { data, error: invokeErr } = await supabase.functions.invoke('send-client-password-reset', {
+      body: { email: trimmed },
     })
     setLoading(false)
-    if (err) {
+    const payloadErr =
+      data && typeof data === 'object' && data !== null && 'error' in data
+        ? (data as { error?: string }).error
+        : undefined
+    if (invokeErr || payloadErr) {
       setError(t('forgot_err'))
     } else {
       setSent(true)
