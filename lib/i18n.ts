@@ -420,6 +420,21 @@ export const translations = {
     settings_delete_pending:     'Zahtjev za brisanje na čekanju',
     settings_delete_pending_msg: 'Tvoj zahtjev za brisanje računa je poslan {date}. Podaci će biti obrisani za 30 dana.',
     settings_delete_cancel_request: 'Poništi zahtjev za brisanje',
+
+    settings_help_section: 'POMOĆ',
+    settings_view_intro: 'Pogledaj uvod',
+
+    onboarding_s1_title: 'Tvoj trener, uvijek uz tebe',
+    onboarding_s1_body:
+      'Svi tvoji planovi treninga i prehrane na jednom mjestu.',
+    onboarding_s2_title: 'Prati svoj napredak',
+    onboarding_s2_body:
+      'Prijavljuj treninge, obroke i check-inove direktno iz app.',
+    onboarding_s3_title: 'Uvijek u kontaktu',
+    onboarding_s3_body:
+      'Poruke s trenerom, feedback i motivacija — sve na jednom mjestu.',
+    onboarding_next: 'Dalje',
+    onboarding_start: 'Počni',
   },
 
   en: {
@@ -841,6 +856,21 @@ export const translations = {
     settings_delete_pending:     'Deletion request pending',
     settings_delete_pending_msg: 'Your account deletion request was submitted on {date}. Data will be deleted in 30 days.',
     settings_delete_cancel_request: 'Cancel deletion request',
+
+    settings_help_section: 'HELP',
+    settings_view_intro: 'View introduction',
+
+    onboarding_s1_title: 'Your coach, always with you',
+    onboarding_s1_body:
+      'All your training and nutrition plans in one place.',
+    onboarding_s2_title: 'Track your progress',
+    onboarding_s2_body:
+      'Log workouts, meals and check-ins right from the app.',
+    onboarding_s3_title: 'Stay in touch',
+    onboarding_s3_body:
+      'Messages with your coach, feedback and motivation — all in one place.',
+    onboarding_next: 'Next',
+    onboarding_start: 'Get started',
   },
 } satisfies Record<Lang, Record<string, string>>
 

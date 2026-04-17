@@ -11,7 +11,7 @@ import { Session } from '@supabase/supabase-js'
 
 export default function RootLayout() {
   const router = useRouter()
-  const [session, setSession] = useState<Session | null>(null)
+  const [, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
   const notifListener = useRef<Notifications.EventSubscription | null>(null)
   const responseListener = useRef<Notifications.EventSubscription | null>(null)
@@ -106,6 +106,7 @@ export default function RootLayout() {
     <LanguageProvider>
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
         <Stack.Screen name="(auth)/login" />
         <Stack.Screen name="(auth)/forgot-password" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="(auth)/set-password" options={{ animation: 'slide_from_bottom', gestureEnabled: false }} />

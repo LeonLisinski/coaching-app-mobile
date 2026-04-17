@@ -1,8 +1,9 @@
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { UnitLiftLogo } from '@/lib/UnitLiftLogo'
 import { useLanguage } from '@/lib/LanguageContext'
 import Constants from 'expo-constants'
-import { useRouter } from 'expo-router'
+import { useRouter, type Href } from 'expo-router'
 import * as Linking from 'expo-linking'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -167,6 +168,22 @@ export default function SettingsScreen() {
               )
             })}
           </View>
+        </View>
+
+        {/* Help — replay onboarding */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>{t('settings_help_section')}</Text>
+          <TouchableOpacity
+            style={[styles.infoRow, { borderBottomWidth: 0 }]}
+            onPress={async () => {
+              await AsyncStorage.removeItem('hasSeenOnboarding')
+              router.replace('/onboarding' as Href)
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.infoKey}>{t('settings_view_intro')}</Text>
+            <Text style={styles.privacyLink}>ℹ️</Text>
+          </TouchableOpacity>
         </View>
 
         {/* App info */}

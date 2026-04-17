@@ -1,20 +1,34 @@
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
-import { Redirect } from 'expo-router'
+import { Redirect, type Href } from 'expo-router'
 import { useEffect, useState } from 'react'
 
+const HAS_SEEN_ONBOARDING = 'hasSeenOnboarding'
+
 export default function Index() {
-  const [hasSession, setHasSession] = useState<boolean | null>(null)
+  const [ready, setReady] = useState(false)
+  const [hasSession, setHasSession] = useState(false)
+  const [seenOnboarding, setSeenOnboarding] = useState(true)
 
   useEffect(() => {
-    // _layout.tsx already resolved getSession() before rendering this component,
-    // so this call returns from Supabase's in-memory cache — essentially instant.
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => setHasSession(!!session))
-      .catch(() => setHasSession(false))
+    Promise.all([
+      supabase.auth.getSession(),
+      AsyncStorage.getItem(HAS_SEEN_ONBOARDING),
+    ])
+      .then(([{ data: { session } }, seen]) => {
+        setHasSession(!!session)
+        setSeenOnboarding(seen === 'true')
+      })
+      .catch(() => {
+        setHasSession(false)
+        setSeenOnboarding(false)
+      })
+      .finally(() => setReady(true))
   }, [])
 
-  // null = still resolving (cache hit, so this is one frame at most)
-  if (hasSession === null) return null
+  if (!ready) return null
+
+  if (!seenOnboarding) return <Redirect href={'/onboarding' as Href} />
 
   return hasSession ? <Redirect href="/(tabs)" /> : <Redirect href="/(auth)/login" />
 }
