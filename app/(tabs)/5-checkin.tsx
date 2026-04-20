@@ -3,12 +3,26 @@ import { useLanguage } from '@/lib/LanguageContext'
 import { useClient } from '@/lib/ClientContext'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import * as ImagePicker from 'expo-image-picker'
-import { useRouter } from 'expo-router'
-import { useEffect, useState } from 'react'
+import { useRouter, useFocusEffect } from 'expo-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native'
+
+const getToday = () => {
+  const now = new Date(Date.now() - 4 * 60 * 60 * 1000)
+  return now.toISOString().split('T')[0]
+}
+
+const MAX_BACK_DAYS = 3
+
+/** Timezone-safe date offset using UTC math on ISO date strings (same as nutrition). */
+const offsetDate = (dateStr: string, days: number): string => {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d + days))
+  return dt.toISOString().split('T')[0]
+}
 
 type Parameter = {
   id: string; name: string; type: string; unit: string | null
@@ -18,21 +32,22 @@ type CheckinConfig = { checkin_day: number | null; photo_frequency: string | nul
 type CheckinValues = Record<string, any>
 type ExistingCheckin = { id: string; values: CheckinValues; photo_urls: any[] | null; trainer_comment: string | null }
 type DailyLog = { id: string; values: CheckinValues }
-type RecentComment = { comment: string; date: string }
 
 // DAYS is now derived from i18n inside components
 
-const shouldSendPhotos = (frequency: string | null, lastCheckinDate: string | null): boolean => {
+/** `refDate` = day being edited (YYYY-MM-DD); used for retro check-ins, not wall-clock "now". */
+const shouldSendPhotos = (frequency: string | null, lastCheckinDate: string | null, refDate: string): boolean => {
   if (!frequency) return false
   if (frequency === 'every' || frequency === 'weekly') return true
+  const ref = new Date(`${refDate}T12:00:00`)
   if (frequency === 'biweekly') {
     if (!lastCheckinDate) return true
-    return Math.floor((new Date().getTime() - new Date(lastCheckinDate).getTime()) / 86400000) >= 14
+    return Math.floor((ref.getTime() - new Date(`${lastCheckinDate}T12:00:00`).getTime()) / 86400000) >= 14
   }
   if (frequency === 'monthly') {
     if (!lastCheckinDate) return true
-    const last = new Date(lastCheckinDate); const now = new Date()
-    return last.getMonth() !== now.getMonth() || last.getFullYear() !== now.getFullYear()
+    const last = new Date(`${lastCheckinDate}T12:00:00`)
+    return last.getMonth() !== ref.getMonth() || last.getFullYear() !== ref.getFullYear()
   }
   return false
 }
@@ -86,7 +101,9 @@ export default function CheckinScreen() {
   const [dailyValues, setDailyValues] = useState<CheckinValues>({})
   const [checkinValues, setCheckinValues] = useState<CheckinValues>({})
   const [photos, setPhotos] = useState<Record<string, string>>({})
-  const [loading, setLoading] = useState(true)
+  /** First full load (bootstrap + first day). Date changes use `syncing` only. */
+  const [ready, setReady] = useState(() => !ctxClient?.clientId)
+  const [syncing, setSyncing] = useState(false)
   const [savingDaily, setSavingDaily] = useState(false)
   const [savingCheckin, setSavingCheckin] = useState(false)
   const [existingCheckin, setExistingCheckin] = useState<ExistingCheckin | null>(null)
@@ -98,115 +115,228 @@ export default function CheckinScreen() {
   const [checkinSubmitted, setCheckinSubmitted] = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
   const [resolvedExistingUrls, setResolvedExistingUrls] = useState<Record<string, string>>({})
-  const [recentComment, setRecentComment] = useState<RecentComment | null>(null)
   const [isLate, setIsLate] = useState(false)
   const [savingDraft, setSavingDraft] = useState(false)
   const [draftRestored, setDraftRestored] = useState(false)
+  /** Latest check-in with a trainer comment (fallback when selected day has none). */
+  const [latestTrainerComment, setLatestTrainerComment] = useState<{ comment: string; date: string } | null>(null)
+  const [selectedDate, setSelectedDate] = useState(getToday)
+  const [minDate, setMinDate] = useState<string | null>(null)
+  const [bootstrapReady, setBootstrapReady] = useState(false)
+  const dailyParamsRef = useRef<Parameter[]>([])
+  dailyParamsRef.current = dailyParams
+  const firstDayLoaded = useRef(false)
+  const dayLoadSeq = useRef(0)
 
-  useEffect(() => { fetchData() }, [])
+  const today = getToday()
+  const hardMin = offsetDate(today, -MAX_BACK_DAYS)
+  const effectiveMin = minDate && minDate > hardMin ? minDate : hardMin
+  const canGoBack = selectedDate > effectiveMin
+  const canGoForward = selectedDate < today
 
-  const fetchData = async () => {
-    // Use shared ClientContext — avoids a redundant clients fetch
-    const cId = ctxClient?.clientId
-    const tId = ctxClient?.trainerId
-    if (!cId || !tId) { setLoading(false); return }
-    setClientId(cId); setTrainerId(tId)
-    // Alias so the rest of the function body below stays unchanged
-    const clientData = { id: cId, trainer_id: tId }
-    const now = new Date()
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-    const [{ data: paramsData }, { data: configData }, { data: todayCheckin }, { data: todayDaily }, { data: lastCheckin }] = await Promise.all([
-      supabase.from('checkin_parameters').select('*').eq('trainer_id', clientData.trainer_id).order('order_index'),
-      supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions').eq('client_id', clientData.id).single(),
-      supabase.from('checkins').select('id, values, photo_urls, trainer_comment').eq('client_id', clientData.id).eq('date', today).single(),
-      supabase.from('daily_logs').select('id, values').eq('client_id', clientData.id).eq('date', today).single(),
-      supabase.from('checkins').select('date').eq('client_id', clientData.id).order('date', { ascending: false }).limit(2),
-    ])
-    if (paramsData) {
-      setDailyParams(paramsData.filter((p: Parameter) => p.frequency === 'daily'))
-      setWeeklyParams(paramsData.filter((p: Parameter) => p.frequency === 'weekly'))
-    }
-    if (configData) setConfig(configData)
-    if (todayCheckin) {
-      setExistingCheckin(todayCheckin)
-      setCheckinValues(todayCheckin.values || {})
-      setCheckinSubmitted(true)
-      const existingPhotoUrls: any[] = todayCheckin.photo_urls || []
-      const paths = existingPhotoUrls.map((p: any) => p?.url).filter((u: string) => u && !u.startsWith('http'))
-      if (paths.length) {
-        const { data: signed } = await supabase.storage.from('checkin-images').createSignedUrls(paths, 3600)
-        if (signed) {
-          const urlMap: Record<string, string> = Object.fromEntries(
-            signed.filter((s: any) => s.path && s.signedUrl).map((s: any) => [s.path, s.signedUrl])
-          )
-          const resolved: Record<string, string> = {}
-          existingPhotoUrls.forEach((p: any) => { if (p?.position && p?.url) resolved[p.position] = urlMap[p.url] ?? p.url })
-          setResolvedExistingUrls(resolved)
-        }
-      }
-    }
-    if (todayDaily) {
-      setExistingDailyLog(todayDaily)
-      setDailyValues(todayDaily.values || {})
-      // Only mark as submitted if at least one daily parameter has an actual value
-      // (daily_logs record can exist just from the is_training_day toggle on Home screen)
-      const dailyParamIds = paramsData
-        ?.filter((p: Parameter) => p.frequency === 'daily')
-        .map((p: Parameter) => p.id) ?? []
-      const hasActualValues = dailyParamIds.some(
-        (id: string) => todayDaily.values?.[id] != null && todayDaily.values[id] !== '',
-      )
-      setDailySubmitted(hasActualValues)
-    }
-    const prevCheckin = lastCheckin?.find((c: any) => c.date !== today)
-    setLastCheckinDate(prevCheckin?.date || null)
-
-    // Fetch most recent trainer comment — trainer may comment on a past check-in,
-    // so we can't rely on today's check-in alone.
-    const { data: commentedCheckin } = await supabase
-      .from('checkins')
-      .select('trainer_comment, date')
-      .eq('client_id', clientData.id)
-      .not('trainer_comment', 'is', null)
-      .neq('trainer_comment', '')
-      .order('date', { ascending: false })
-      .limit(1)
-      .single()
-    if (commentedCheckin?.trainer_comment) {
-      setRecentComment({ comment: commentedCheckin.trainer_comment, date: commentedCheckin.date })
-    }
-
-    // Detect late check-in: if the expected checkin day has passed this week
-    // and no check-in has been submitted since that expected date.
-    if (configData?.checkin_day !== null && configData?.checkin_day !== undefined) {
-      const todayDayNum = new Date().getDay()
-      const daysSince = (todayDayNum - configData.checkin_day + 7) % 7
-      if (daysSince > 0) {
-        const expectedDate = new Date()
-        expectedDate.setDate(expectedDate.getDate() - daysSince)
-        const expectedStr = `${expectedDate.getFullYear()}-${String(expectedDate.getMonth() + 1).padStart(2, '0')}-${String(expectedDate.getDate()).padStart(2, '0')}`
-        const hasCheckinThisWeek = lastCheckin?.some((c: any) => c.date >= expectedStr)
-        setIsLate(!hasCheckinThisWeek)
-      }
-    }
-
-    // Restore daily draft if no daily log submitted today
-    if (!todayDaily) {
-      try {
-        const key = `daily-draft-${cId}`
-        const raw = await AsyncStorage.getItem(key)
-        if (raw) {
-          const draft = JSON.parse(raw)
-          setDailyValues(draft)
-          setDraftRestored(true)
-        }
-      } catch {}
-    }
-
-    setLoading(false)
+  const fmtSelectedDate = (dateStr: string): string => {
+    if (dateStr === today) return t('today')
+    const yesterday = offsetDate(today, -1)
+    if (dateStr === yesterday) return lang === 'hr' ? 'Jučer' : 'Yesterday'
+    const [y, m, d] = dateStr.split('-').map(Number)
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    return dt.toLocaleDateString(lang === 'hr' ? 'hr' : 'en', { day: 'numeric', month: 'short', timeZone: 'UTC' })
   }
 
-  const dailyDraftKey = clientId ? `daily-draft-${clientId}` : null
+  // Bootstrap: parameters, config, client min date.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const cId = ctxClient?.clientId
+      const tId = ctxClient?.trainerId
+      if (!cId || !tId) {
+        setBootstrapReady(false)
+        firstDayLoaded.current = false
+        setReady(true)
+        return
+      }
+      setBootstrapReady(false)
+      firstDayLoaded.current = false
+      setReady(false)
+      const [{ data: paramsData }, { data: configData }, { data: clientRow }, { data: latestCommentRow }] = await Promise.all([
+        supabase.from('checkin_parameters').select('*').eq('trainer_id', tId).order('order_index'),
+        supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions').eq('client_id', cId).maybeSingle(),
+        supabase.from('clients').select('created_at').eq('id', cId).maybeSingle(),
+        supabase
+          .from('checkins')
+          .select('trainer_comment, date')
+          .eq('client_id', cId)
+          .not('trainer_comment', 'is', null)
+          .neq('trainer_comment', '')
+          .order('date', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ])
+      if (cancelled) return
+      if (paramsData) {
+        setDailyParams(paramsData.filter((p: Parameter) => p.frequency === 'daily'))
+        setWeeklyParams(paramsData.filter((p: Parameter) => p.frequency === 'weekly'))
+      }
+      if (configData) setConfig(configData)
+      if (clientRow?.created_at) setMinDate(clientRow.created_at.split('T')[0])
+      setClientId(cId)
+      setTrainerId(tId)
+      if (latestCommentRow?.trainer_comment?.trim()) {
+        setLatestTrainerComment({ comment: latestCommentRow.trainer_comment.trim(), date: latestCommentRow.date })
+      } else {
+        setLatestTrainerComment(null)
+      }
+      setBootstrapReady(true)
+    })()
+    return () => { cancelled = true }
+  }, [ctxClient])
+
+  // Osvježi zadnji komentar trenera kad korisnik ponovno otvori tab (npr. nakon što trener doda komentar).
+  useFocusEffect(
+    useCallback(() => {
+      const cId = clientId
+      if (!cId) return
+      let cancelled = false
+      ;(async () => {
+        const { data } = await supabase
+          .from('checkins')
+          .select('trainer_comment, date')
+          .eq('client_id', cId)
+          .not('trainer_comment', 'is', null)
+          .neq('trainer_comment', '')
+          .order('date', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (cancelled) return
+        if (data?.trainer_comment?.trim()) {
+          setLatestTrainerComment({ comment: data.trainer_comment.trim(), date: data.date })
+        } else {
+          setLatestTrainerComment(null)
+        }
+      })()
+      return () => { cancelled = true }
+    }, [clientId]),
+  )
+
+  // Load check-in + daily log + drafts for the selected day (up to 3 days back, same window as nutrition).
+  useEffect(() => {
+    if (!bootstrapReady || !clientId || !trainerId) return
+    let cancelled = false
+    const loadId = ++dayLoadSeq.current
+    ;(async () => {
+      try {
+      const dateStr = selectedDate
+      const cId = clientId
+      if (firstDayLoaded.current) setSyncing(true)
+      setPhotos({})
+      setResolvedExistingUrls({})
+
+      const [{ data: dayCheckin }, { data: dayDaily }, { data: priorCheckin }] = await Promise.all([
+        supabase.from('checkins').select('id, values, photo_urls, trainer_comment').eq('client_id', cId).eq('date', dateStr).maybeSingle(),
+        supabase.from('daily_logs').select('id, values').eq('client_id', cId).eq('date', dateStr).maybeSingle(),
+        supabase.from('checkins').select('date').eq('client_id', cId).lt('date', dateStr).order('date', { ascending: false }).limit(1).maybeSingle(),
+      ])
+      if (cancelled) return
+
+      setLastCheckinDate(priorCheckin?.date ?? null)
+
+      // Late warning only for "today" view
+      if (dateStr === today && config?.checkin_day !== null && config?.checkin_day !== undefined) {
+        const { data: lastFew } = await supabase.from('checkins').select('date').eq('client_id', cId).order('date', { ascending: false }).limit(10)
+        if (cancelled) return
+        const todayDayNum = new Date().getDay()
+        const daysSince = (todayDayNum - config.checkin_day + 7) % 7
+        if (daysSince > 0) {
+          const expectedDate = new Date()
+          expectedDate.setDate(expectedDate.getDate() - daysSince)
+          const expectedStr = `${expectedDate.getFullYear()}-${String(expectedDate.getMonth() + 1).padStart(2, '0')}-${String(expectedDate.getDate()).padStart(2, '0')}`
+          const hasCheckinThisWeek = lastFew?.some((c: any) => c.date >= expectedStr)
+          setIsLate(!hasCheckinThisWeek)
+        } else {
+          setIsLate(false)
+        }
+      } else {
+        setIsLate(false)
+      }
+
+      if (dayCheckin) {
+        setExistingCheckin(dayCheckin)
+        setCheckinValues(dayCheckin.values || {})
+        setCheckinSubmitted(true)
+        const existingPhotoUrls: any[] = dayCheckin.photo_urls || []
+        const paths = existingPhotoUrls.map((p: any) => p?.url).filter((u: string) => u && !u.startsWith('http'))
+        if (paths.length) {
+          const { data: signed } = await supabase.storage.from('checkin-images').createSignedUrls(paths, 3600)
+          if (cancelled) return
+          if (signed) {
+            const urlMap: Record<string, string> = Object.fromEntries(
+              signed.filter((s: any) => s.path && s.signedUrl).map((s: any) => [s.path, s.signedUrl])
+            )
+            const resolved: Record<string, string> = {}
+            existingPhotoUrls.forEach((p: any) => { if (p?.position && p?.url) resolved[p.position] = urlMap[p.url] ?? p.url })
+            setResolvedExistingUrls(resolved)
+          }
+        }
+      } else {
+        setExistingCheckin(null)
+        setCheckinValues({})
+        setCheckinSubmitted(false)
+      }
+
+      if (dayDaily) {
+        setExistingDailyLog(dayDaily)
+        setDailyValues(dayDaily.values || {})
+        const dailyParamIds = dailyParamsRef.current.map((p: Parameter) => p.id)
+        const hasActualValues = dailyParamIds.some(
+          (id: string) => dayDaily.values?.[id] != null && dayDaily.values[id] !== '',
+        )
+        setDailySubmitted(hasActualValues)
+        setDraftRestored(false)
+      } else {
+        setExistingDailyLog(null)
+        setDailyValues({})
+        setDailySubmitted(false)
+        try {
+          const key = `daily-draft-${cId}-${dateStr}`
+          let raw = await AsyncStorage.getItem(key)
+          if (!raw && dateStr === today) {
+            raw = await AsyncStorage.getItem(`daily-draft-${cId}`)
+          }
+          if (raw) {
+            const draft = JSON.parse(raw)
+            setDailyValues(draft)
+            setDraftRestored(true)
+          } else {
+            setDraftRestored(false)
+          }
+        } catch {
+          setDraftRestored(false)
+        }
+      }
+
+      } finally {
+        if (cancelled || dayLoadSeq.current !== loadId) return
+        if (!firstDayLoaded.current) {
+          firstDayLoaded.current = true
+          setReady(true)
+        }
+        setSyncing(false)
+      }
+    })()
+    return () => { cancelled = true }
+  }, [bootstrapReady, clientId, trainerId, selectedDate, config?.checkin_day, today])
+
+  // Keep selected day inside allowed window (nutrition parity: max 3 days back, not before signup).
+  useEffect(() => {
+    if (!bootstrapReady) return
+    setSelectedDate(d => {
+      if (d < effectiveMin) return effectiveMin
+      if (d > today) return today
+      return d
+    })
+  }, [bootstrapReady, effectiveMin, today])
+
+  const dailyDraftKey = clientId ? `daily-draft-${clientId}-${selectedDate}` : null
 
   const saveDraft = async () => {
     if (!dailyDraftKey) return
@@ -248,7 +378,7 @@ export default function CheckinScreen() {
       const response = await fetch(uri); const blob = await response.blob()
       const arrayBuffer = await new Response(blob).arrayBuffer()
       const uint8Array = new Uint8Array(arrayBuffer)
-      const fileName = `${clientId}/${new Date().toISOString().split('T')[0]}_${position}_${Date.now()}.jpg`
+      const fileName = `${clientId}/${selectedDate}_${position}_${Date.now()}.jpg`
       const { error } = await supabase.storage.from('checkin-images').upload(fileName, uint8Array, { contentType: 'image/jpeg', upsert: true })
       if (error) throw error
       return fileName
@@ -265,20 +395,22 @@ export default function CheckinScreen() {
     })
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingDaily(true)
-    const now = new Date()
-    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const dateStr = selectedDate
     try {
       if (existingDailyLog) {
         const { error } = await supabase.from('daily_logs').update({ values: dailyValues }).eq('id', existingDailyLog.id)
         if (error) throw error
       } else {
-        const { data, error } = await supabase.from('daily_logs').insert({ client_id: clientId, trainer_id: trainerId, date: today, values: dailyValues }).select().single()
+        const { data, error } = await supabase.from('daily_logs').insert({ client_id: clientId, trainer_id: trainerId, date: dateStr, values: dailyValues }).select().single()
         if (error) throw error
         if (data) setExistingDailyLog(data)
       }
       setDailySubmitted(true)
       setDraftRestored(false)
-      clearDraft()
+      await clearDraft()
+      if (dateStr === today) {
+        try { await AsyncStorage.removeItem(`daily-draft-${clientId}`) } catch {}
+      }
     } catch {
       Alert.alert(t('error'), t('ci_err_save'))
     } finally {
@@ -296,9 +428,8 @@ export default function CheckinScreen() {
     })
     if (missing.length > 0) { Alert.alert(t('error'), `${t('required_fields')}: ${missing.map(p => p.name).join(', ')}`); return }
     setSavingCheckin(true)
+    const dateStr = selectedDate
     try {
-      const now = new Date()
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
       const uploadedUrls: Record<string, string> = {}
       let uploadFailed = false
       for (const [position, uri] of Object.entries(photos)) {
@@ -311,7 +442,7 @@ export default function CheckinScreen() {
         return
       }
       const photoUrlsArray = Object.entries(uploadedUrls).map(([position, url]) => ({ position, url }))
-      const payload = { client_id: clientId, trainer_id: trainerId, date: today, values: checkinValues, photo_urls: photoUrlsArray.length > 0 ? photoUrlsArray : null }
+      const payload = { client_id: clientId, trainer_id: trainerId, date: dateStr, values: checkinValues, photo_urls: photoUrlsArray.length > 0 ? photoUrlsArray : null }
       if (existingCheckin) {
         const { error } = await supabase.from('checkins').update(payload).eq('id', existingCheckin.id)
         if (error) throw error
@@ -426,12 +557,22 @@ export default function CheckinScreen() {
     return null
   }
 
-  const todayDay = new Date().getDay()
-  const isCheckinDay = config?.checkin_day === todayDay
-  const needsPhotos = shouldSendPhotos(config?.photo_frequency || null, lastCheckinDate)
+  const [sy, sm, sd] = selectedDate.split('-').map(Number)
+  const selectedDayOfWeek = new Date(sy, sm - 1, sd).getDay()
+  const isCheckinDay = config?.checkin_day === selectedDayOfWeek
+  const needsPhotos = shouldSendPhotos(config?.photo_frequency || null, lastCheckinDate, selectedDate)
   const photoPositions: string[] = config?.photo_positions || []
 
-  if (loading) return <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#f59e0b" /></View>
+  const dayCommentText = existingCheckin?.trainer_comment?.trim() ?? ''
+  const trainerCommentBody = dayCommentText || latestTrainerComment?.comment?.trim() || ''
+  const trainerCommentLabelDate = dayCommentText
+    ? selectedDate
+    : (latestTrainerComment?.date ?? selectedDate)
+  const hasWeeklyShell = weeklyParams.length > 0 || photoPositions.length > 0
+
+  if (!ready && ctxClient?.clientId) {
+    return <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#f59e0b" /></View>
+  }
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={0}>
@@ -450,8 +591,28 @@ export default function CheckinScreen() {
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>
-            {new Date().toLocaleDateString(locale, { weekday: 'long', day: '2-digit', month: 'long' })}
+            {new Date(`${selectedDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', day: '2-digit', month: 'long' })}
           </Text>
+          <View style={styles.dateNav}>
+            <TouchableOpacity
+              style={[styles.dateNavBtn, !canGoBack && styles.dateNavBtnDisabled]}
+              onPress={() => { if (canGoBack) setSelectedDate(offsetDate(selectedDate, -1)) }}
+              disabled={!canGoBack}
+            >
+              <Text style={[styles.dateNavArrow, !canGoBack && { opacity: 0.3 }]}>‹</Text>
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 }}>
+              {syncing && <ActivityIndicator size="small" color="white" />}
+              <Text style={styles.dateNavLabel}>{fmtSelectedDate(selectedDate)}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.dateNavBtn, !canGoForward && styles.dateNavBtnDisabled]}
+              onPress={() => { if (canGoForward) setSelectedDate(offsetDate(selectedDate, 1)) }}
+              disabled={!canGoForward}
+            >
+              <Text style={[styles.dateNavArrow, !canGoForward && { opacity: 0.3 }]}>›</Text>
+            </TouchableOpacity>
+          </View>
           {config && (
             <Text style={styles.headerMeta}>
               {t('ci_weekly_title')}: {config.checkin_day !== null ? DAYS[config.checkin_day] : t('none')}
@@ -459,27 +620,14 @@ export default function CheckinScreen() {
           )}
         </View>
 
-        {/* Late check-in warning */}
-        {isLate && !checkinSubmitted && (
+        {/* Late check-in warning — only when viewing today */}
+        {selectedDate === today && isLate && !checkinSubmitted && (
           <View style={styles.lateCard}>
             <Text style={styles.lateIcon}>⚠️</Text>
             <View style={{ flex: 1 }}>
               <Text style={styles.lateTitle}>{t('ci_late_title')}</Text>
               <Text style={styles.lateSub}>{t('ci_late_sub')}</Text>
             </View>
-          </View>
-        )}
-
-        {/* Most recent trainer comment (from any past check-in) */}
-        {recentComment && (
-          <View style={styles.recentCommentCard}>
-            <View style={styles.recentCommentHeader}>
-              <Text style={styles.recentCommentLabel}>{t('ci_trainer_comment')}</Text>
-              <Text style={styles.recentCommentDate}>
-                {new Date(recentComment.date).toLocaleDateString(locale, { day: '2-digit', month: 'short' })}
-              </Text>
-            </View>
-            <Text style={styles.recentCommentText}>{recentComment.comment}</Text>
           </View>
         )}
 
@@ -539,8 +687,23 @@ export default function CheckinScreen() {
           </View>
         )}
 
+        {/* Komentar trenera (samo tekst) kad nema tjednog bloka — inače je unutar tjednog, iznad fotografija */}
+        {!!trainerCommentBody && !hasWeeklyShell && (
+          <View style={styles.block}>
+            <View style={styles.recentCommentCard}>
+              <View style={styles.recentCommentHeader}>
+                <Text style={styles.recentCommentLabel}>{t('ci_trainer_comment')}</Text>
+                <Text style={styles.recentCommentDate}>
+                  {fmtSelectedDate(trainerCommentLabelDate)}
+                </Text>
+              </View>
+              <Text style={styles.recentCommentText}>{trainerCommentBody}</Text>
+            </View>
+          </View>
+        )}
+
         {/* ── DIVIDER ─────────────────────────────────────────────── */}
-        {dailyParams.length > 0 && (weeklyParams.length > 0 || photoPositions.length > 0) && (
+        {dailyParams.length > 0 && hasWeeklyShell && (
           <View style={styles.divider}>
             <View style={styles.dividerLine} />
             <Text style={styles.dividerLabel}>{t('ci_weekly_title').toLowerCase()}</Text>
@@ -549,7 +712,7 @@ export default function CheckinScreen() {
         )}
 
         {/* ── TJEDNI CHECK-IN ──────────────────────────────────────── */}
-        {(weeklyParams.length > 0 || photoPositions.length > 0) && (
+        {hasWeeklyShell && (
           <View style={styles.block}>
             <View style={styles.blockHeader}>
               <View style={[styles.blockDot, { backgroundColor: '#78350f' }]} />
@@ -560,8 +723,6 @@ export default function CheckinScreen() {
                 </Text>
               </View>
             </View>
-
-            {/* Trainer comment shown at top of screen (covers all past check-ins, not just today) */}
 
             {checkinSubmitted && (
               <View style={styles.submittedRow}>
@@ -577,6 +738,18 @@ export default function CheckinScreen() {
               {weeklyParams.filter(p => p.type === 'number').map(p => renderParam(p, checkinValues, setCheckinValue))}
             </View>
             {weeklyParams.filter(p => p.type !== 'number').map(p => renderParam(p, checkinValues, setCheckinValue))}
+
+            {!!trainerCommentBody && (
+              <View style={styles.recentCommentCard}>
+                <View style={styles.recentCommentHeader}>
+                  <Text style={styles.recentCommentLabel}>{t('ci_trainer_comment')}</Text>
+                  <Text style={styles.recentCommentDate}>
+                    {fmtSelectedDate(trainerCommentLabelDate)}
+                  </Text>
+                </View>
+                <Text style={styles.recentCommentText}>{trainerCommentBody}</Text>
+              </View>
+            )}
 
             {/* Fotografije */}
             {needsPhotos && photoPositions.length > 0 && (
@@ -673,6 +846,15 @@ const styles = StyleSheet.create({
   },
   historyBtnText: { fontSize: 12, color: 'white', fontWeight: '600' },
   headerTitle: { fontSize: 22, fontWeight: '800', color: 'white', marginBottom: 8, textTransform: 'capitalize' },
+  dateNav: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12,
+    paddingHorizontal: 4, paddingVertical: 4, marginTop: 4, marginBottom: 8,
+  },
+  dateNavBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 10 },
+  dateNavBtnDisabled: { opacity: 0.3 },
+  dateNavArrow: { fontSize: 22, color: 'white', fontWeight: '300' },
+  dateNavLabel: { fontSize: 14, fontWeight: '700', color: 'white', textAlign: 'center' },
   headerMeta: { fontSize: 13, color: 'rgba(255,255,255,0.75)' },
 
   // Block (dnevni / tjedni)
@@ -761,7 +943,7 @@ const styles = StyleSheet.create({
   lateSub: { fontSize: 12, color: '#ea580c', lineHeight: 17 },
 
   recentCommentCard: {
-    marginHorizontal: 16, marginTop: 12,
+    marginHorizontal: 0, marginTop: 4, marginBottom: 12,
     backgroundColor: '#eff6ff', borderRadius: 14, padding: 14,
     borderLeftWidth: 3, borderLeftColor: '#3b82f6',
   },

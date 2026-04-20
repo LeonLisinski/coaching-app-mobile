@@ -76,6 +76,8 @@ export const translations = {
     home_stat_last:           'Zadnje',
     home_chart_empty:         'Nema dovoljno podataka za graf',
     home_chart_no_data:       'Nema podataka za ovaj parametar',
+    home_chart_change:        'Promjena',
+    home_chart_entries:       'Unosa',
 
     // ── Training screen ──────────────────────────────────────────────────────────
     train_active_plan:     'Aktivni plan',
@@ -512,6 +514,8 @@ export const translations = {
     home_stat_last:           'Last',
     home_chart_empty:         'Not enough data for chart',
     home_chart_no_data:       'No data for this parameter',
+    home_chart_change:        'Change',
+    home_chart_entries:       'Points',
 
     // ── Training screen ───────────────────────────────────────────────────────────
     train_active_plan:     'Active plan',

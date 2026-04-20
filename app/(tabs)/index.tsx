@@ -29,7 +29,7 @@ const getToday = () => {
 
 export default function HomeScreen() {
   const router = useRouter()
-  const { t } = useLanguage()
+  const { t, lang } = useLanguage()
   const { clientData } = useClient()
   const DAYS_SHORT = t('days_short').split(',')
   const [profile, setProfile] = useState<Profile | null>(null)
@@ -167,24 +167,51 @@ export default function HomeScreen() {
   }
 
   const loadChartData = async (cId: string, param: CheckinParam) => {
+    const localeTag = lang === 'hr' ? 'hr-HR' : 'en-US'
     const [{ data: dailyData }, { data: weeklyData }] = await Promise.all([
-      supabase.from('daily_logs').select('date, values').eq('client_id', cId).order('date', { ascending: false }).limit(20),
-      supabase.from('checkins').select('date, values').eq('client_id', cId).order('date', { ascending: false }).limit(20),
+      supabase.from('daily_logs').select('date, values').eq('client_id', cId).order('date', { ascending: false }).limit(60),
+      supabase.from('checkins').select('date, values').eq('client_id', cId).order('date', { ascending: false }).limit(60),
     ])
-    // Fetch descending (newest first), filter, then reverse to chronological order for the chart
-    const toPoints = (rows: any[] | null): ChartPoint[] =>
-      (rows || [])
-        .filter(r => r.values?.[param.id] !== undefined && r.values?.[param.id] !== null && r.values?.[param.id] !== '')
-        .map(r => ({
-          label: new Date(r.date).toLocaleDateString('hr', { day: '2-digit', month: '2-digit' }),
-          value: parseFloat(String(r.values[param.id]).replace(',', '.')),
-          date: r.date,
-        }))
-        .filter(p => !isNaN(p.value))
-        .reverse()
-    const dailyPoints = toPoints(dailyData)
-    const weeklyPoints = toPoints(weeklyData)
-    setChartData((dailyPoints.length >= weeklyPoints.length ? dailyPoints : weeklyPoints).slice(-12))
+
+    const parseVal = (raw: unknown): number | null => {
+      if (raw === undefined || raw === null || raw === '') return null
+      const v = parseFloat(String(raw).replace(',', '.'))
+      return Number.isFinite(v) ? v : null
+    }
+
+    type Row = { date: string; value: number; pri: number }
+    const rows: Row[] = []
+    for (const r of weeklyData || []) {
+      const v = parseVal(r.values?.[param.id])
+      if (v === null) continue
+      rows.push({ date: r.date, value: v, pri: 0 })
+    }
+    for (const r of dailyData || []) {
+      const v = parseVal(r.values?.[param.id])
+      if (v === null) continue
+      rows.push({ date: r.date, value: v, pri: 1 })
+    }
+    rows.sort((a, b) => a.date.localeCompare(b.date))
+
+    const merged: ChartPoint[] = []
+    let i = 0
+    while (i < rows.length) {
+      const d = rows[i].date
+      let best = rows[i]
+      let j = i + 1
+      while (j < rows.length && rows[j].date === d) {
+        if (rows[j].pri >= best.pri) best = rows[j]
+        j++
+      }
+      merged.push({
+        label: new Date(`${d}T12:00:00`).toLocaleDateString(localeTag, { day: '2-digit', month: '2-digit' }),
+        value: best.value,
+        date: d,
+      })
+      i = j
+    }
+
+    setChartData(merged.slice(-12))
   }
 
   const handleSelectParam = async (param: CheckinParam) => {
@@ -491,24 +518,30 @@ export default function HomeScreen() {
           )}
 
           {chartData.length >= 2 && (() => {
+            // Promjena = razlika zadnje i prve točke u prikazanom rasponu (ne zadnje dvije — inače 0 ako je zadnji segment ravan)
+            const firstPt = chartData[0]
             const last = chartData[chartData.length - 1]
-            const prev = chartData[chartData.length - 2]
-            const diff = last.value - prev.value
-            const pct = prev.value !== 0 ? ((diff / prev.value) * 100).toFixed(1) : '0'
+            const diff = last.value - firstPt.value
+            const pct =
+              Math.abs(firstPt.value) >= 1e-9
+                ? ((diff / firstPt.value) * 100).toFixed(1)
+                : null
+            const diffRounded = Math.abs(diff) < 1e-9 ? 0 : diff
+            const diffDisp = Number.isInteger(diffRounded) ? String(diffRounded) : diffRounded.toFixed(1)
             return (
               <View style={styles.chartStats}>
                 <View style={styles.chartStatItem}>
-                  <Text style={styles.chartStatLabel}>Trenutno</Text>
+                  <Text style={styles.chartStatLabel}>{t('home_stat_last')}</Text>
                   <Text style={styles.chartStatValue}>{last.value} {selectedParam?.unit || ''}</Text>
                 </View>
                 <View style={styles.chartStatItem}>
-                  <Text style={styles.chartStatLabel}>Promjena</Text>
-                  <Text style={[styles.chartStatValue, { color: diff < 0 ? '#22c55e' : diff > 0 ? '#ef4444' : '#6b7280' }]}>
-                    {diff > 0 ? '+' : ''}{diff.toFixed(1)} ({pct}%)
+                  <Text style={styles.chartStatLabel}>{t('home_chart_change')}</Text>
+                  <Text style={[styles.chartStatValue, { color: diffRounded < 0 ? '#22c55e' : diffRounded > 0 ? '#ef4444' : '#6b7280' }]}>
+                    {diffRounded > 0 ? '+' : ''}{diffDisp}{pct != null ? ` (${pct}%)` : ''}
                   </Text>
                 </View>
                 <View style={styles.chartStatItem}>
-                  <Text style={styles.chartStatLabel}>Unosa</Text>
+                  <Text style={styles.chartStatLabel}>{t('home_chart_entries')}</Text>
                   <Text style={styles.chartStatValue}>{chartData.length}</Text>
                 </View>
               </View>
