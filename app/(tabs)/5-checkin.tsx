@@ -279,8 +279,19 @@ export default function CheckinScreen() {
         }
       } else {
         setExistingCheckin(null)
-        setCheckinValues({})
         setCheckinSubmitted(false)
+        // Restore in-progress weekly draft if one exists
+        try {
+          const wKey = `weekly-draft-${cId}-${dateStr}`
+          const raw = await AsyncStorage.getItem(wKey)
+          if (raw) {
+            setCheckinValues(JSON.parse(raw))
+          } else {
+            setCheckinValues({})
+          }
+        } catch {
+          setCheckinValues({})
+        }
       }
 
       if (dayDaily) {
@@ -337,6 +348,13 @@ export default function CheckinScreen() {
   }, [bootstrapReady, effectiveMin, today])
 
   const dailyDraftKey = clientId ? `daily-draft-${clientId}-${selectedDate}` : null
+  const weeklyDraftKey = clientId ? `weekly-draft-${clientId}-${selectedDate}` : null
+
+  // Auto-save weekly check-in draft whenever values change (only while not yet submitted)
+  useEffect(() => {
+    if (!weeklyDraftKey || checkinSubmitted || Object.keys(checkinValues).length === 0) return
+    AsyncStorage.setItem(weeklyDraftKey, JSON.stringify(checkinValues)).catch(() => {})
+  }, [checkinValues, weeklyDraftKey, checkinSubmitted])
 
   const saveDraft = async () => {
     if (!dailyDraftKey) return
@@ -441,15 +459,31 @@ export default function CheckinScreen() {
         Alert.alert(t('error'), t('ci_err_upload'))
         return
       }
-      const photoUrlsArray = Object.entries(uploadedUrls).map(([position, url]) => ({ position, url }))
-      const payload = { client_id: clientId, trainer_id: trainerId, date: dateStr, values: checkinValues, photo_urls: photoUrlsArray.length > 0 ? photoUrlsArray : null }
+      const newPhotoEntries = Object.entries(uploadedUrls).map(([position, url]) => ({ position, url }))
+      // Merge new uploads with existing ones — never wipe photos that were already saved
+      const existingPhotoEntries: { position: string; url: string }[] = existingCheckin?.photo_urls ?? []
+      const mergedPhotos = [
+        ...existingPhotoEntries.filter(e => !newPhotoEntries.find(n => n.position === e.position)),
+        ...newPhotoEntries,
+      ]
+      const payload = {
+        client_id: clientId,
+        trainer_id: trainerId,
+        date: dateStr,
+        values: checkinValues,
+        photo_urls: mergedPhotos.length > 0 ? mergedPhotos : null,
+      }
       if (existingCheckin) {
         const { error } = await supabase.from('checkins').update(payload).eq('id', existingCheckin.id)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('checkins').insert(payload)
+        const { data: inserted, error } = await supabase.from('checkins').insert(payload).select('id, values, photo_urls, trainer_comment').single()
         if (error) throw error
+        // Set existingCheckin so a second submit in the same session does update, not insert
+        if (inserted) setExistingCheckin(inserted)
       }
+      // Clear the weekly draft now that it's been saved to DB
+      if (weeklyDraftKey) AsyncStorage.removeItem(weeklyDraftKey).catch(() => {})
       setCheckinSubmitted(true)
       setShowConfirm(false)
       Alert.alert(t('ci_sent_alert'), t('ci_sent_alert_msg'))
