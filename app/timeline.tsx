@@ -4,9 +4,10 @@ import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
-  ActivityIndicator, Platform, ScrollView,
+  ActivityIndicator, ScrollView,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type EventType = 'checkin' | 'package' | 'payment' | 'workout_plan' | 'meal_plan'
 
@@ -43,6 +44,7 @@ function getMonthKey(iso: string): string {
 type GroupedEvents = { monthKey: string; events: TimelineEvent[] }[]
 
 export default function TimelineScreen() {
+  const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const router = useRouter()
   const { clientData: ctxClient } = useClient()
@@ -225,7 +227,7 @@ export default function TimelineScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -358,7 +360,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#1e1b4b',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 26,
     borderBottomLeftRadius: 28,

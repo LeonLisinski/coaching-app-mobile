@@ -2,6 +2,7 @@ import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
 import { useClient } from '@/lib/ClientContext'
 import { useEffect, useRef, useState } from 'react'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ActivityIndicator, Image, Keyboard, Linking, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
@@ -154,6 +155,7 @@ const profileStyles = StyleSheet.create({
 
 // ── Main Chat Screen ──────────────────────────────────────────────────────────
 export default function ChatScreen() {
+  const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const { clientData } = useClient()
   const [messages, setMessages] = useState<Message[]>([])
@@ -360,7 +362,7 @@ export default function ChatScreen() {
   return (
     <View style={[styles.container, { paddingBottom: kbOffset }]}>
       {/* Header — tap opens profile */}
-      <TouchableOpacity style={styles.header} onPress={() => setShowProfile(true)} activeOpacity={0.85}>
+      <TouchableOpacity style={[styles.header, { paddingTop: insets.top + 12 }]} onPress={() => setShowProfile(true)} activeOpacity={0.85}>
         <TrainerAvatar size={40} />
         <View style={{ flex: 1 }}>
           <Text style={styles.headerName}>{trainerName}</Text>
@@ -526,7 +528,7 @@ const styles = StyleSheet.create({
   avatarText: { color: 'white', fontWeight: '700' },
   header: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#1e1b4b', paddingTop: 60, paddingBottom: 16, paddingHorizontal: 20,
+    backgroundColor: '#1e1b4b', paddingBottom: 16, paddingHorizontal: 20,
   },
   headerName: { fontSize: 16, fontWeight: '700', color: 'white' },
   headerSub: { fontSize: 12, color: '#a5b4fc' },

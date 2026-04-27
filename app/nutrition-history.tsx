@@ -4,9 +4,10 @@ import { useClient } from '@/lib/ClientContext'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { useCallback, useEffect, useState } from 'react'
 import {
-  ActivityIndicator, Platform, ScrollView,
+  ActivityIndicator, ScrollView,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type NutritionLog = {
   date: string
@@ -154,6 +155,7 @@ const rowStyles = StyleSheet.create({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function NutritionHistoryScreen() {
+  const insets = useSafeAreaInsets()
   const { t, lang } = useLanguage()
   const router = useRouter()
   const { clientData: ctxClient } = useClient()
@@ -223,7 +225,7 @@ export default function NutritionHistoryScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -357,7 +359,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#14532d',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 22,
     borderBottomLeftRadius: 28,

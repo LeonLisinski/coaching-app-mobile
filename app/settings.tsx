@@ -10,6 +10,7 @@ import {
   Alert, Modal, Platform, ScrollView, StyleSheet, Text, TextInput,
   TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0'
 const PRIVACY_POLICY_URL = 'https://www.unitlift.com/hr/privatnost'
@@ -22,6 +23,7 @@ const LANG_OPTIONS = [
 export default function SettingsScreen() {
   const router = useRouter()
   const { lang, setLang, t } = useLanguage()
+  const insets = useSafeAreaInsets()
   const [profile, setProfile] = useState<{ full_name: string; email: string; deletion_requested_at?: string | null } | null>(null)
   const [deleteModalVisible, setDeleteModalVisible] = useState(false)
   const [deleteWord, setDeleteWord] = useState('')
@@ -121,7 +123,7 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -162,7 +164,7 @@ export default function SettingsScreen() {
                   activeOpacity={0.8}
                 >
                   <Text style={styles.langFlag}>{opt.flag}</Text>
-                  <Text style={[styles.langLabel, active && styles.langLabelActive]}>{opt.label}</Text>
+                  <Text style={[styles.langLabel, active && styles.langLabelActive]} numberOfLines={1}>{opt.label}</Text>
                   {active && <Text style={styles.langCheck}>✓</Text>}
                 </TouchableOpacity>
               )
@@ -294,7 +296,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#1d4ed8',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 28,
     borderBottomLeftRadius: 28,

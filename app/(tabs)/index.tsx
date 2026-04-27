@@ -10,6 +10,7 @@ import {
   StyleSheet, Text, TouchableOpacity, View
 } from 'react-native'
 import Svg, { Circle, Defs, Line, LinearGradient, Path, Stop } from 'react-native-svg'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type Profile = { full_name: string; email: string }
 type CheckinConfig = { checkin_day: number | null }
@@ -28,6 +29,7 @@ const getToday = () => {
 }
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets()
   const router = useRouter()
   const { t, lang } = useLanguage()
   const { clientData } = useClient()
@@ -82,22 +84,19 @@ export default function HomeScreen() {
     setClientId(cId)
     setTrainerId(tId)
 
-    // Profile fetch (not in ClientContext — only needed here for greeting)
-    const { data: profileData } = await supabase
-      .from('profiles').select('full_name, email').eq('id', uid).single()
-    if (profileData) setProfile(profileData)
-
-    // Round 2: all remaining queries in parallel, using Supabase FK joins to
-    // eliminate the extra sequential rounds that previously fetched plan names.
+    // All queries in a single parallel round — profile included to eliminate the
+    // sequential round that previously blocked the remaining 7 fetches.
     const [
+      { data: profileData },
       { data: configData },
       { data: checkinData },
-      { data: wpData },       // workout plan with name via FK join
-      { data: mpData },       // meal plan with name + plan_type via FK join
+      { data: wpData },
+      { data: mpData },
       { count: unreadCount },
       { data: paramsData },
       { data: dailyLogData },
     ] = await Promise.all([
+      supabase.from('profiles').select('full_name, email').eq('id', uid).single(),
       supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).single(),
       supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).single(),
       supabase.from('client_workout_plans')
@@ -114,6 +113,8 @@ export default function HomeScreen() {
       supabase.from('daily_logs')
         .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).single(),
     ])
+
+    if (profileData) setProfile(profileData)
 
     if (configData) setCheckinConfig(configData)
     setTodayCheckin(checkinData)
@@ -277,7 +278,7 @@ export default function HomeScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
 
       {/* Header */}
-      <View style={styles.headerBg}>
+      <View style={[styles.headerBg, { paddingTop: insets.top + 12 }]}>
         {/* UnitLift branding row */}
         <View style={styles.brandRow}>
           <View style={styles.brandLeft}>
@@ -581,7 +582,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f3f4f6' },
 
   headerBg: {
-    backgroundColor: '#1d4ed8', paddingTop: 60, paddingHorizontal: 24,
+    backgroundColor: '#1d4ed8', paddingHorizontal: 24,
     paddingBottom: 28, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 20,
   },
   brandRow: {

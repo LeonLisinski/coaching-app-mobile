@@ -4,9 +4,10 @@ import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
-  ActivityIndicator, Platform, ScrollView,
+  ActivityIndicator, ScrollView,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type PackageInfo = {
   id: string
@@ -66,6 +67,7 @@ function getStatusConfig(status: string, t: (k: any) => string): { label: string
 }
 
 export default function PackageScreen() {
+  const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const router = useRouter()
   const { clientData: ctxClient } = useClient()
@@ -133,7 +135,7 @@ export default function PackageScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -341,7 +343,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#7c3aed',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 28,
     borderBottomLeftRadius: 28,

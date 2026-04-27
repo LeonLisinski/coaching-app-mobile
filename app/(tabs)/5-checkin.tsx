@@ -9,6 +9,7 @@ import {
   ActivityIndicator, Alert, Image, KeyboardAvoidingView, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const getToday = () => {
   const now = new Date(Date.now() - 4 * 60 * 60 * 1000)
@@ -94,6 +95,7 @@ export default function CheckinScreen() {
   const { t, lang } = useLanguage()
   const { clientData: ctxClient } = useClient()
   const locale = lang === 'en' ? 'en' : 'hr'
+  const insets = useSafeAreaInsets()
   const DAYS = t('days_long').split(',')
   const [dailyParams, setDailyParams] = useState<Parameter[]>([])
   const [weeklyParams, setWeeklyParams] = useState<Parameter[]>([])
@@ -613,7 +615,7 @@ export default function CheckinScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
 
         {/* Header */}
-        <View style={styles.headerBg}>
+        <View style={[styles.headerBg, { paddingTop: insets.top + 12 }]}>
           <View style={styles.headerTopRow}>
             <Text style={styles.headerLabel}>Check-in</Text>
             <TouchableOpacity
@@ -869,7 +871,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
   headerBg: {
-    backgroundColor: '#78350f', paddingTop: 60, paddingHorizontal: 20,
+    backgroundColor: '#78350f', paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 8,
   },
   headerTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 },

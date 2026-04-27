@@ -4,9 +4,10 @@ import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ActivityIndicator, Dimensions, Platform, ScrollView,
+  ActivityIndicator, Dimensions, ScrollView,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Defs, LinearGradient, Path, Stop, Circle, Line } from 'react-native-svg'
 
 type Parameter = { id: string; name: string; unit: string | null; order_index: number }
@@ -298,6 +299,7 @@ const paramCardStyles = StyleSheet.create({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function MetricsScreen() {
+  const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const router = useRouter()
   const { clientData: ctxClient } = useClient()
@@ -390,7 +392,7 @@ export default function MetricsScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -488,7 +490,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#4f46e5',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 26,
     borderBottomLeftRadius: 28,

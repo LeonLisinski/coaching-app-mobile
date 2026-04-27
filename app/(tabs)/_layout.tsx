@@ -17,7 +17,9 @@ export default function TabsLayout() {
 
   useEffect(() => {
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser()
+      // getSession() reads from device storage — no network latency on startup
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
       if (!user) { router.replace('/(auth)/login'); return }
       setUserId(user.id)
 

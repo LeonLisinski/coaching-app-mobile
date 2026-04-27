@@ -4,9 +4,10 @@ import { useClient } from '@/lib/ClientContext'
 import { useRouter } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ActivityIndicator, Dimensions, Platform, ScrollView,
+  ActivityIndicator, Dimensions, ScrollView,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Rect, Text as SvgText, Line } from 'react-native-svg'
 
 type SetLog = {
@@ -637,6 +638,7 @@ const volStyles = StyleSheet.create({
 type TabMode = 'sessions' | 'prs' | 'volume'
 
 export default function WorkoutHistoryScreen() {
+  const insets = useSafeAreaInsets()
   const { t, lang } = useLanguage()
   const locale = lang === 'en' ? 'en' : 'hr'
   const router = useRouter()
@@ -705,7 +707,7 @@ export default function WorkoutHistoryScreen() {
     <View style={styles.container}>
 
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -791,7 +793,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#1e3a5f',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 26,
     borderBottomLeftRadius: 28,

@@ -4,6 +4,7 @@ import { useClient } from '@/lib/ClientContext'
 import { Image } from 'expo-image'
 import { useRouter } from 'expo-router'
 import { useEffect, useMemo, useState } from 'react'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ActivityIndicator, Dimensions, Modal, Platform,
   ScrollView, StatusBar, StyleSheet, Text, TouchableOpacity, View,
@@ -424,6 +425,7 @@ type FilterMode = 'all' | 'comments' | 'photos'
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function CheckinHistoryScreen() {
+  const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const router = useRouter()
   const { clientData: ctxClient } = useClient()
@@ -525,7 +527,7 @@ export default function CheckinHistoryScreen() {
     <View style={styles.container}>
 
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <View style={styles.headerTopRow}>
           <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
             <View style={styles.backBtnInner}>
@@ -696,7 +698,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#78350f',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 26,
     borderBottomLeftRadius: 28,

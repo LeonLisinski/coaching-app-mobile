@@ -4,6 +4,7 @@ import { useClient } from '@/lib/ClientContext'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useNavigation, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ActivityIndicator, Alert, Animated, AppState, Keyboard, KeyboardAvoidingView, Linking, Modal,
   Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
@@ -376,6 +377,7 @@ function UpdateModal({
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
 export default function TrainingScreen() {
+  const insets = useSafeAreaInsets()
   const router = useRouter()
   const navigation = useNavigation()
   const { t, lang } = useLanguage()
@@ -695,7 +697,7 @@ export default function TrainingScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
-        <View style={styles.sessionHeader}>
+        <View style={[styles.sessionHeader, { paddingTop: insets.top + 12 }]}>
           <TouchableOpacity onPress={() => setActiveDay(null)} style={styles.backBtn}>
             <View style={styles.backBtnInner}>
               <Text style={styles.backBtnArrow}>‹</Text>
@@ -864,7 +866,7 @@ export default function TrainingScreen() {
   // ── Plan overview ──
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <View style={styles.headerBg}>
+      <View style={[styles.headerBg, { paddingTop: insets.top + 12 }]}>
         <View style={styles.headerTopRow}>
           <Text style={styles.headerLabel}>{t('train_active_plan')}</Text>
           <TouchableOpacity
@@ -961,7 +963,7 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
   headerBg: {
-    backgroundColor: '#1e3a5f', paddingTop: 60, paddingHorizontal: 20,
+    backgroundColor: '#1e3a5f', paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,
   },
   headerTopRow: {
@@ -1025,7 +1027,7 @@ const styles = StyleSheet.create({
   dayArrow: { fontSize: 18, color: '#9ca3af' },
   dayDoneCheck: { fontSize: 18, color: '#22c55e', fontWeight: '700' },
   sessionHeader: {
-    backgroundColor: '#1e3a5f', paddingTop: 60, paddingHorizontal: 20, paddingBottom: 20,
+    backgroundColor: '#1e3a5f', paddingHorizontal: 20, paddingBottom: 20,
   },
   backBtn: { marginBottom: 12, alignSelf: 'flex-start' },
   backBtnInner: {

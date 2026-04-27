@@ -5,9 +5,10 @@ import { Image } from 'expo-image'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
 import {
-  ActivityIndicator, Dimensions, Platform, ScrollView,
+  ActivityIndicator, Dimensions, ScrollView,
   StyleSheet, Text, TouchableOpacity, View,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 type PhotoEntry = { position: string; url: string }
 type CheckinData = {
@@ -30,6 +31,7 @@ function formatDate(dateStr: string): string {
 }
 
 export default function ComparePhotosScreen() {
+  const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const router = useRouter()
   const { clientData: ctxClient } = useClient()
@@ -112,7 +114,7 @@ export default function ComparePhotosScreen() {
   return (
     <View style={styles.container}>
       {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn} activeOpacity={0.7}>
           <View style={styles.backBtnInner}>
             <Text style={styles.backArrow}>‹</Text>
@@ -228,7 +230,6 @@ const styles = StyleSheet.create({
 
   header: {
     backgroundColor: '#78350f',
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingHorizontal: 20,
     paddingBottom: 24,
     borderBottomLeftRadius: 28,

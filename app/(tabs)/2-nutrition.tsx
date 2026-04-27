@@ -4,6 +4,7 @@ import { useClient } from '@/lib/ClientContext'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
   ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View
@@ -57,6 +58,7 @@ const n = (v: number | null | undefined): string => {
 }
 
 export default function NutritionScreen() {
+  const insets = useSafeAreaInsets()
   const router = useRouter()
   const navigation = useNavigation()
   const { t, lang } = useLanguage()
@@ -417,7 +419,7 @@ export default function NutritionScreen() {
         keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
 
         {/* Header */}
-        <View style={styles.headerBg}>
+        <View style={[styles.headerBg, { paddingTop: insets.top + 12 }]}>
           <View style={styles.headerTop}>
             <Text style={styles.headerLabel}>{t('nutr_plan_label')}</Text>
             <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -707,7 +709,7 @@ const styles = StyleSheet.create({
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
 
   headerBg: {
-    backgroundColor: '#064e3b', paddingTop: 60, paddingHorizontal: 20,
+    backgroundColor: '#064e3b', paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,
   },
   headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
