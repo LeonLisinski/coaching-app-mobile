@@ -62,7 +62,8 @@
           "photosPermission": "UnitLift treba pristup tvojim fotografijama za upload slika napretka.",
           "cameraPermission": "UnitLift treba pristup kameri za fotografiranje napretka."
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

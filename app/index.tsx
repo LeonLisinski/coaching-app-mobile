@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '@/lib/supabase'
 import { Redirect, type Href } from 'expo-router'
 import { useEffect, useState } from 'react'
+import { ActivityIndicator, View } from 'react-native'
 
 const HAS_SEEN_ONBOARDING = 'hasSeenOnboarding'
 
@@ -26,7 +27,13 @@ export default function Index() {
       .finally(() => setReady(true))
   }, [])
 
-  if (!ready) return null
+  if (!ready) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f9fafb' }}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+      </View>
+    )
+  }
 
   if (!seenOnboarding) return <Redirect href={'/onboarding' as Href} />
 

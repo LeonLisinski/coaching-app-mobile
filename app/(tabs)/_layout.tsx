@@ -9,53 +9,88 @@ type AccessStatus = 'loading' | 'ok' | 'inactive_client' | 'inactive_trainer'
 
 export default function TabsLayout() {
   const router = useRouter()
-  const { setClientData } = useClient()
+  const { setClientData, setProfile, setCheckinConfig, setCheckinParams, setClientCreatedAt } = useClient()
   const [unreadCount, setUnreadCount] = useState(0)
   const [clientId, setClientId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
   const [accessStatus, setAccessStatus] = useState<AccessStatus>('loading')
 
   useEffect(() => {
+    // On timeout redirect to login instead of showing a misleading "account deactivated" screen
+    const timeout = setTimeout(() => router.replace('/(auth)/login'), 15000)
+
     const init = async () => {
-      // getSession() reads from device storage — no network latency on startup
-      const { data: { session } } = await supabase.auth.getSession()
-      const user = session?.user
-      if (!user) { router.replace('/(auth)/login'); return }
-      setUserId(user.id)
+      try {
+        // getSession() reads from device storage — no network latency on startup
+        const { data: { session } } = await supabase.auth.getSession()
+        const user = session?.user
+        if (!user) { router.replace('/(auth)/login'); return }
+        setUserId(user.id)
 
-      // Fetch client record
-      const { data: client } = await supabase
-        .from('clients')
-        .select('id, active, trainer_id')
-        .eq('user_id', user.id)
-        .single()
+        // Fetch client record (include created_at for shared cache)
+        const { data: client } = await supabase
+          .from('clients')
+          .select('id, active, trainer_id, created_at')
+          .eq('user_id', user.id)
+          .single()
 
-      if (!client || !client.active) {
-        setAccessStatus('inactive_client')
-        return
+        if (!client || !client.active) {
+          setAccessStatus('inactive_client')
+          return
+        }
+
+        // All independent queries run in parallel — shared cache data piggybacked at no extra cost
+        const [
+          { data: trainerActive },
+          { count },
+          { data: profileData },
+          { data: configData },
+          { data: paramsData },
+        ] = await Promise.all([
+          supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }),
+          supabase
+            .from('messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('client_id', client.id)
+            .eq('read', false)
+            .neq('sender_id', user.id),
+          supabase
+            .from('profiles')
+            .select('full_name, email')
+            .eq('id', user.id)
+            .single(),
+          supabase
+            .from('checkin_config')
+            .select('checkin_day, photo_frequency, photo_positions')
+            .eq('client_id', client.id)
+            .maybeSingle(),
+          supabase
+            .from('checkin_parameters')
+            .select('id, name, type, unit, options, required, order_index, frequency')
+            .eq('trainer_id', client.trainer_id)
+            .order('order_index'),
+        ])
+
+        if (trainerActive !== true) {
+          setAccessStatus('inactive_trainer')
+          return
+        }
+
+        setClientId(client.id)
+        setAccessStatus('ok')
+        setUnreadCount(count ?? 0)
+        // Populate shared context so all screens can skip their own fetches
+        setClientData({ clientId: client.id, trainerId: client.trainer_id, userId: user.id })
+        if (profileData) setProfile(profileData)
+        if (configData) setCheckinConfig(configData)
+        if (paramsData) setCheckinParams(paramsData)
+        if ((client as any).created_at) setClientCreatedAt((client as any).created_at.split('T')[0])
+      } catch {
+        // Network error on startup — redirect to login so the user isn't stuck
+        router.replace('/(auth)/login')
+      } finally {
+        clearTimeout(timeout)
       }
-
-      // RPC (subscription check) and unread count don't depend on each other — run in parallel
-      const [{ data: trainerActive }, { count }] = await Promise.all([
-        supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }),
-        supabase
-          .from('messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('client_id', client.id)
-          .eq('read', false)
-          .neq('sender_id', user.id),
-      ])
-
-      if (trainerActive !== true) {
-        setAccessStatus('inactive_trainer')
-        return
-      }
-
-      setClientId(client.id)
-      setAccessStatus('ok')
-      setUnreadCount(count ?? 0)
-      // Populate shared context so all screens can skip their own clients fetch
-      setClientData({ clientId: client.id, trainerId: client.trainer_id, userId: user.id })
     }
     init()
   }, [])

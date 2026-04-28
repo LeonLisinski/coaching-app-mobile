@@ -93,7 +93,12 @@ const confirmStyles = StyleSheet.create({
 export default function CheckinScreen() {
   const router = useRouter()
   const { t, lang } = useLanguage()
-  const { clientData: ctxClient } = useClient()
+  const {
+    clientData: ctxClient,
+    checkinConfig: ctxCheckinConfig,
+    checkinParams: ctxCheckinParams,
+    clientCreatedAt: ctxClientCreatedAt,
+  } = useClient()
   const locale = lang === 'en' ? 'en' : 'hr'
   const insets = useSafeAreaInsets()
   const DAYS = t('days_long').split(',')
@@ -160,10 +165,12 @@ export default function CheckinScreen() {
       setBootstrapReady(false)
       firstDayLoaded.current = false
       setReady(false)
-      const [{ data: paramsData }, { data: configData }, { data: clientRow }, { data: latestCommentRow }] = await Promise.all([
-        supabase.from('checkin_parameters').select('*').eq('trainer_id', tId).order('order_index'),
-        supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions').eq('client_id', cId).maybeSingle(),
-        supabase.from('clients').select('created_at').eq('id', cId).maybeSingle(),
+      // Use context-cached data when available — avoids redundant network calls
+      const hasCtxParams = ctxCheckinParams.length > 0
+      const hasCtxConfig = !!ctxCheckinConfig
+      const hasCtxCreatedAt = !!ctxClientCreatedAt
+
+      const [{ data: latestCommentRow }, { data: paramsFallback }, { data: configFallback }, { data: clientRow }] = await Promise.all([
         supabase
           .from('checkins')
           .select('trainer_comment, date')
@@ -173,14 +180,27 @@ export default function CheckinScreen() {
           .order('date', { ascending: false })
           .limit(1)
           .maybeSingle(),
+        hasCtxParams
+          ? Promise.resolve({ data: null as any })
+          : supabase.from('checkin_parameters').select('*').eq('trainer_id', tId).order('order_index') as any,
+        hasCtxConfig
+          ? Promise.resolve({ data: null as any })
+          : supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions').eq('client_id', cId).maybeSingle() as any,
+        hasCtxCreatedAt
+          ? Promise.resolve({ data: null as any })
+          : supabase.from('clients').select('created_at').eq('id', cId).maybeSingle() as any,
       ])
+
+      const paramsData = hasCtxParams ? ctxCheckinParams : paramsFallback
+      const configData = hasCtxConfig ? ctxCheckinConfig : configFallback
       if (cancelled) return
       if (paramsData) {
         setDailyParams(paramsData.filter((p: Parameter) => p.frequency === 'daily'))
         setWeeklyParams(paramsData.filter((p: Parameter) => p.frequency === 'weekly'))
       }
-      if (configData) setConfig(configData)
-      if (clientRow?.created_at) setMinDate(clientRow.created_at.split('T')[0])
+      if (configData) setConfig(configData as any)
+      const createdAt = ctxClientCreatedAt ?? clientRow?.created_at?.split('T')[0] ?? null
+      if (createdAt) setMinDate(createdAt)
       setClientId(cId)
       setTrainerId(tId)
       if (latestCommentRow?.trainer_comment?.trim()) {

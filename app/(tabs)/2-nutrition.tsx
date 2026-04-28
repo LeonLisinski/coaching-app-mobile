@@ -62,7 +62,7 @@ export default function NutritionScreen() {
   const router = useRouter()
   const navigation = useNavigation()
   const { t, lang } = useLanguage()
-  const { clientData: ctxClient } = useClient()
+  const { clientData: ctxClient, clientCreatedAt: ctxClientCreatedAt } = useClient()
   const [plan, setPlan] = useState<MealPlan | null>(null)
   const [altPlan, setAltPlan] = useState<MealPlan | null>(null)
   const [planMode, setPlanMode] = useState<'training_day' | 'rest_day' | 'default' | null>(null)
@@ -150,9 +150,13 @@ export default function NutritionScreen() {
     setClientId(cId)
     setTrainerId(tId)
 
-    // Fetch created_at for minDate (not stored in context)
-    supabase.from('clients').select('created_at').eq('id', cId).single()
-      .then(({ data }) => { if (data?.created_at) setMinDate(data.created_at.split('T')[0]) })
+    // Use context-cached created_at for minDate (avoids a round-trip on every nutrition mount)
+    if (ctxClientCreatedAt) {
+      setMinDate(ctxClientCreatedAt)
+    } else {
+      supabase.from('clients').select('created_at').eq('id', cId).single()
+        .then(({ data }) => { if (data?.created_at) setMinDate(data.created_at.split('T')[0]) })
+    }
 
     // Alias for the rest of the function body
     const clientData = { id: cId, trainer_id: tId }
@@ -379,10 +383,20 @@ export default function NutritionScreen() {
       setMacros(finalMacros)
     }
 
-    await upsertLog(plan, completedMeals, finalMacros, true)
-    // Clear draft since day is now confirmed
-    if (clientId) AsyncStorage.removeItem(`nutrition-macros-draft-${clientId}-${selectedDate}`).catch(() => {})
+    const ok = await upsertLog(plan, completedMeals, finalMacros, true)
     setSaving(false)
+
+    if (!ok) {
+      // Server fail — keep draft, surface error so the user can retry
+      Alert.alert(
+        t('common_error') || 'Greška',
+        'Nismo uspjeli potvrditi dan. Provjeri internet i pokušaj ponovo.',
+      )
+      return
+    }
+
+    // Clear draft only when the server actually saved
+    if (clientId) AsyncStorage.removeItem(`nutrition-macros-draft-${clientId}-${selectedDate}`).catch(() => {})
     Alert.alert(t('nutr_day_confirmed_alert'), t('nutr_day_confirmed_msg'))
   }
 

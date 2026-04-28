@@ -32,7 +32,7 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets()
   const router = useRouter()
   const { t, lang } = useLanguage()
-  const { clientData } = useClient()
+  const { clientData, profile: ctxProfile, checkinConfig: ctxCheckinConfig, checkinParams: ctxCheckinParams } = useClient()
   const DAYS_SHORT = t('days_short').split(',')
   const [profile, setProfile] = useState<Profile | null>(null)
   const [checkinConfig, setCheckinConfig] = useState<CheckinConfig | null>(null)
@@ -41,7 +41,8 @@ export default function HomeScreen() {
   const [hasNutrition, setHasNutrition] = useState(false)
   const [hasTrainingDayPlan, setHasTrainingDayPlan] = useState(false)
   const [unreadMessages, setUnreadMessages] = useState(0)
-  const [loading, setLoading] = useState(true)
+  // Start without spinner if profile is already in context (pre-fetched by tabs layout)
+  const [loading, setLoading] = useState(() => !ctxProfile)
   const [trainingPlanName, setTrainingPlanName] = useState<string | null>(null)
   const [nutritionPlanName, setNutritionPlanName] = useState<string | null>(null)
   const [checkinParams, setCheckinParams] = useState<CheckinParam[]>([])
@@ -75,7 +76,6 @@ export default function HomeScreen() {
   )
 
   const fetchData = async () => {
-    // Use shared ClientContext to avoid re-fetching the clients row on every tab focus
     const cId = clientData?.clientId
     const tId = clientData?.trainerId
     const uid = clientData?.userId
@@ -84,20 +84,29 @@ export default function HomeScreen() {
     setClientId(cId)
     setTrainerId(tId)
 
-    // All queries in a single parallel round — profile included to eliminate the
-    // sequential round that previously blocked the remaining 7 fetches.
+    // Apply context-cached static data instantly (no network needed)
+    const cachedProfile = ctxProfile
+    const cachedConfig = ctxCheckinConfig
+    const numericParams = ctxCheckinParams.filter(p => p.type === 'number')
+
+    if (cachedProfile) setProfile(cachedProfile)
+    if (cachedConfig) setCheckinConfig(cachedConfig)
+    if (numericParams.length > 0) {
+      setCheckinParams(numericParams)
+      setSelectedParam(numericParams[0])
+    }
+
+    // Fetch only dynamic per-day data + fallback static data if context was empty
     const [
-      { data: profileData },
-      { data: configData },
       { data: checkinData },
       { data: wpData },
       { data: mpData },
       { count: unreadCount },
-      { data: paramsData },
       { data: dailyLogData },
+      { data: profileFallback },
+      { data: configFallback },
+      { data: paramsFallback },
     ] = await Promise.all([
-      supabase.from('profiles').select('full_name, email').eq('id', uid).single(),
-      supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).single(),
       supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).single(),
       supabase.from('client_workout_plans')
         .select('id, workout_plans(name)')
@@ -108,15 +117,23 @@ export default function HomeScreen() {
       supabase.from('messages')
         .select('id', { count: 'exact', head: true })
         .eq('client_id', cId).eq('read', false).neq('sender_id', uid),
-      supabase.from('checkin_parameters')
-        .select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index'),
       supabase.from('daily_logs')
         .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).single(),
+      // Fallback fetches — fire only when context cache is empty (first install, error, etc.)
+      cachedProfile
+        ? Promise.resolve({ data: null as typeof cachedProfile | null })
+        : supabase.from('profiles').select('full_name, email').eq('id', uid).single() as any,
+      cachedConfig
+        ? Promise.resolve({ data: null as typeof cachedConfig | null })
+        : supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).single() as any,
+      numericParams.length > 0
+        ? Promise.resolve({ data: null as any })
+        : supabase.from('checkin_parameters').select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index') as any,
     ])
 
-    if (profileData) setProfile(profileData)
+    if (!cachedProfile && profileFallback) setProfile(profileFallback)
+    if (!cachedConfig && configFallback) setCheckinConfig(configFallback as any)
 
-    if (configData) setCheckinConfig(configData)
     setTodayCheckin(checkinData)
     setHasTraining(!!wpData?.id)
     setHasNutrition((mpData?.length ?? 0) > 0)
@@ -140,12 +157,14 @@ export default function HomeScreen() {
     setUnreadMessages(unreadCount ?? 0)
     setLoading(false)
 
-    // Load chart data after main UI is visible — deferred so the screen renders
-    // without waiting for chart queries.
-    if (paramsData && paramsData.length > 0) {
-      setCheckinParams(paramsData)
-      setSelectedParam(paramsData[0])
-      loadChartData(cId, paramsData[0]) // intentionally not awaited
+    // Determine which params to use for chart (context or fallback)
+    const finalParams = numericParams.length > 0 ? numericParams : (paramsFallback ?? [])
+    if (finalParams.length > 0) {
+      if (numericParams.length === 0) {
+        setCheckinParams(finalParams)
+        setSelectedParam(finalParams[0])
+      }
+      loadChartData(cId, finalParams[0]) // intentionally not awaited
     }
   }
 

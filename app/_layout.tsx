@@ -22,13 +22,15 @@ export default function RootLayout() {
     const timeout = setTimeout(() => setLoading(false), 6000)
 
     supabase.auth.getSession()
-      .then(async ({ data: { session } }) => {
+      .then(({ data: { session } }) => {
         setSession(session)
-        // Register push token on cold start if user is already logged in
+        // Register push token in background — must not block the loading gate
         if (session) {
-          const { data: client } = await supabase
+          supabase
             .from('clients').select('id').eq('user_id', session.user.id).single()
-          if (client) registerForPushNotificationsAsync(client.id)
+            .then(({ data: client }) => {
+              if (client) registerForPushNotificationsAsync(client.id)
+            })
         }
       })
       .catch(() => {
@@ -39,8 +41,15 @@ export default function RootLayout() {
         setLoading(false)
       })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setSession(session)
+
+      // Redirect to login when session is invalidated (expired token, remote sign-out, etc.)
+      if (event === 'SIGNED_OUT' || (!session && event === 'TOKEN_REFRESHED')) {
+        router.replace('/(auth)/login')
+        return
+      }
+
       // Re-register on every login (token may have rotated)
       if (session) {
         const { data: client } = await supabase

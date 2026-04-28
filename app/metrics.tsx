@@ -302,7 +302,7 @@ export default function MetricsScreen() {
   const insets = useSafeAreaInsets()
   const { t } = useLanguage()
   const router = useRouter()
-  const { clientData: ctxClient } = useClient()
+  const { clientData: ctxClient, checkinParams: ctxCheckinParams } = useClient()
   const [loading, setLoading] = useState(true)
   const [params, setParams] = useState<Parameter[]>([])
   const [rawData, setRawData] = useState<Record<string, RawPoint[]>>({})
@@ -315,12 +315,10 @@ export default function MetricsScreen() {
     const client = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!client) { setLoading(false); return }
 
-    const [{ data: paramData }, { data: checkinData }, { data: dailyData }] = await Promise.all([
-      supabase.from('checkin_parameters')
-        .select('id, name, unit, order_index')
-        .eq('trainer_id', client.trainer_id)
-        .eq('type', 'number')
-        .order('order_index'),
+    // Use context-cached numeric params when available
+    const cachedParams = ctxCheckinParams.filter(p => p.type === 'number')
+
+    const [{ data: checkinData }, { data: dailyData }, { data: paramFallback }] = await Promise.all([
       supabase.from('checkins')
         .select('date, values')
         .eq('client_id', client.id)
@@ -331,8 +329,16 @@ export default function MetricsScreen() {
         .eq('client_id', client.id)
         .order('date', { ascending: true })
         .limit(365),
+      cachedParams.length > 0
+        ? Promise.resolve({ data: null as any })
+        : supabase.from('checkin_parameters')
+            .select('id, name, unit, order_index')
+            .eq('trainer_id', client.trainer_id)
+            .eq('type', 'number')
+            .order('order_index') as any,
     ])
 
+    const paramData = cachedParams.length > 0 ? cachedParams : paramFallback
     if (!paramData) { setLoading(false); return }
     setParams(paramData)
 
