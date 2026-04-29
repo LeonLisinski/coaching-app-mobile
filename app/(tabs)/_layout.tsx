@@ -174,6 +174,7 @@ export default function TabsLayout() {
     return (
       <View style={bs.center}>
         <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={{ marginTop: 12, fontSize: 11, color: '#9ca3af' }}>Step 3/3 — loading your data</Text>
       </View>
     )
   }

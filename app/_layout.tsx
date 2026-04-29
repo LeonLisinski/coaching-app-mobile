@@ -2,7 +2,7 @@ import * as Linking from 'expo-linking'
 import * as Notifications from 'expo-notifications'
 import { Stack, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, View } from 'react-native'
+import { ActivityIndicator, Text, View } from 'react-native'
 import { registerForPushNotificationsAsync } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 import { LanguageProvider } from '@/lib/LanguageContext'
@@ -18,23 +18,17 @@ export default function RootLayout() {
 
   useEffect(() => {
     let mounted = true
+    let aborted = false
 
     // ── Cold-start session validation ────────────────────────────────────────
-    // The root layout used to only call getSession() (a local-storage read).
-    // After a reinstall, iOS Keychain preserves the old session token even if
-    // the user's data is gone. supabase-js then auto-refreshes lazily on the
-    // first network request — and on a cold start the network radio may not
-    // be warm yet, so the refresh hangs and every subsequent query waits.
-    // Validate explicitly here with a hard 5s timeout. If the token is
-    // valid, downstream tab queries fly with a fresh in-memory token. If it's
-    // invalid or the network is dead, we sign out locally and route to login
-    // instead of leaving the user staring at a spinner.
+    // 5s hard timeout: if getSession/getUser hang on supabase-js auth lock
+    // contention (background _recoverAndRefresh holding the lock on slow
+    // network), we force loading=false and route to login. The `aborted` flag
+    // ensures the original async chain doesn't overwrite state after timeout.
     const startupTimeout = setTimeout(() => {
-      if (!mounted) return
+      if (!mounted || aborted) return
+      aborted = true
       console.warn('[startup] session validation timed out — forcing loading=false')
-      // Fire-and-forget: do NOT await signOut here. supabase-js holds an
-      // internal lock during token refresh. If we await signOut() while that
-      // lock is held, setLoading(false) is never reached → Android loop.
       supabase.auth.signOut({ scope: 'local' }).catch(() => {})
       setSession(null)
       setLoading(false)
@@ -43,21 +37,23 @@ export default function RootLayout() {
     ;(async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession()
+        if (!mounted || aborted) return
 
         if (!session) {
-          if (!mounted) return
           clearTimeout(startupTimeout)
+          aborted = true
           setSession(null)
           setLoading(false)
           return
         }
 
         const { data: { user }, error: userErr } = await supabase.auth.getUser()
-        if (!mounted) return
+        if (!mounted || aborted) return
         clearTimeout(startupTimeout)
+        aborted = true
 
         if (userErr || !user) {
-          await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+          supabase.auth.signOut({ scope: 'local' }).catch(() => {})
           setSession(null)
           setLoading(false)
           return
@@ -82,7 +78,7 @@ export default function RootLayout() {
         if (!mounted) return
         clearTimeout(startupTimeout)
         console.error('[startup CATCH]', { rawMsg: (e as Error)?.message, error: e })
-        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        supabase.auth.signOut({ scope: 'local' }).catch(() => {}) // fire-and-forget
         setSession(null)
         setLoading(false)
       }
@@ -161,6 +157,7 @@ export default function RootLayout() {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f9fafb' }}>
         <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={{ marginTop: 12, fontSize: 11, color: '#9ca3af' }}>Step 1/3 — validating session</Text>
       </View>
     )
   }
