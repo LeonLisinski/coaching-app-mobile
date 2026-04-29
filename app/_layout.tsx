@@ -29,10 +29,13 @@ export default function RootLayout() {
     // valid, downstream tab queries fly with a fresh in-memory token. If it's
     // invalid or the network is dead, we sign out locally and route to login
     // instead of leaving the user staring at a spinner.
-    const startupTimeout = setTimeout(async () => {
+    const startupTimeout = setTimeout(() => {
       if (!mounted) return
-      console.warn('[startup] session validation timed out')
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+      console.warn('[startup] session validation timed out — forcing loading=false')
+      // Fire-and-forget: do NOT await signOut here. supabase-js holds an
+      // internal lock during token refresh. If we await signOut() while that
+      // lock is held, setLoading(false) is never reached → Android loop.
+      supabase.auth.signOut({ scope: 'local' }).catch(() => {})
       setSession(null)
       setLoading(false)
     }, 5000)
