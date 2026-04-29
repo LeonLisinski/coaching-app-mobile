@@ -34,7 +34,7 @@ export default function TabsLayout() {
       setUserId(user.id)
 
       // Fetch the active trainer-client relationship for this user.
-      const { data: client } = await supabase
+      const { data: client, error: clientErr } = await supabase
         .from('clients')
         .select('id, active, trainer_id, created_at')
         .eq('user_id', user.id)
@@ -42,6 +42,19 @@ export default function TabsLayout() {
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle()
+
+      if (clientErr) {
+        // Auth errors (invalid/expired token) should route to login, not "Nema veze".
+        // This happens when a stale SecureStore session fails to auto-refresh.
+        const em = (clientErr.message ?? '').toLowerCase()
+        if (em.includes('token') || em.includes('refresh') || em.includes('session') || em.includes('jwt') || em.includes('auth')) {
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+          router.replace('/(auth)/login')
+          return
+        }
+        setAccessStatus('error')
+        return
+      }
 
       if (!client) {
         setAccessStatus('inactive_client')
@@ -101,8 +114,16 @@ export default function TabsLayout() {
       if (configData) setCheckinConfig(configData as any)
       if (paramsData) setCheckinParams(paramsData as any)
       if ((client as any).created_at) setClientCreatedAt((client as any).created_at.split('T')[0])
-    } catch {
-      setAccessStatus('error')
+    } catch (e) {
+      // Auth errors (stale SecureStore token, invalid refresh) must send the
+      // user to login — not show "Nema veze" which implies a network issue.
+      const msg = String((e as Error)?.message ?? '').toLowerCase()
+      if (msg.includes('token') || msg.includes('refresh') || msg.includes('session') || msg.includes('jwt') || msg.includes('auth')) {
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        router.replace('/(auth)/login')
+      } else {
+        setAccessStatus('error')
+      }
     }
   }
 

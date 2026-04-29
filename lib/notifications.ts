@@ -4,20 +4,28 @@ import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
 import { supabase } from './supabase'
 
-// Notification handler — controls how notifications appear while app is in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-})
+// Expo Go (SDK 53+) removed remote push notification support.
+// Skip push setup entirely in Expo Go to avoid the console error:
+// "expo-notifications: Android Push notifications... removed from Expo Go"
+const isExpoGo = Constants.executionEnvironment === 'storeClient'
+
+// Notification handler — controls how notifications appear while app is in foreground.
+// Only register in actual builds (standalone / development client), not Expo Go.
+if (!isExpoGo) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowAlert: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowBanner: true,
+      shouldShowList: true,
+    }),
+  })
+}
 
 export async function registerForPushNotificationsAsync(clientId: string): Promise<string | null> {
-  // Push notifications require a physical device
-  if (!Device.isDevice) return null
+  // Push notifications require a physical device and a real build (not Expo Go)
+  if (!Device.isDevice || isExpoGo) return null
 
   // Android: create a notification channel
   if (Platform.OS === 'android') {
