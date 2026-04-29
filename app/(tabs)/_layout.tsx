@@ -26,17 +26,21 @@ export default function TabsLayout() {
   const retryRef = useRef(0)
 
   const runInit = async () => {
+    const t0 = Date.now()
+    const log = (msg: string, extra?: unknown) =>
+      console.log(`[runInit +${Date.now() - t0}ms] ${msg}`, extra ?? '')
+
     setAccessStatus('loading')
+    log('start')
     try {
+      log('calling getSession()')
       const { data: { session } } = await supabase.auth.getSession()
+      log('getSession() done', { hasSession: !!session, userId: session?.user?.id })
       const user = session?.user
-      if (!user) { router.replace('/(auth)/login'); return }
+      if (!user) { log('no user → /(auth)/login'); router.replace('/(auth)/login'); return }
       setUserId(user.id)
 
-      // Fetch the active trainer-client relationship for this user.
-      // Wrap in a 9s race: if supabase-js is stuck waiting for its internal
-      // auth lock (e.g. a background _recoverAndRefresh is still running),
-      // the query can hang. The race ensures runInit() always progresses.
+      log('querying clients (race, 9s)')
       type ClientRow = { id: string; active: boolean; trainer_id: string; created_at: string }
       type QResult = { data: ClientRow | null; error: { message: string } | null }
       const { data: client, error: clientErr } = await Promise.race<QResult>([
@@ -52,24 +56,26 @@ export default function TabsLayout() {
           setTimeout(() => resolve({ data: null, error: { message: 'clients query timed out' } }), 9000)
         ),
       ])
+      log('clients query done', { hasClient: !!client, errorMessage: clientErr?.message })
 
       if (clientErr) {
-        // Auth errors (invalid/expired token) and lock-contention timeouts must
-        // route to login, not show "Nema veze" (which implies a network issue).
         const em = (clientErr.message ?? '').toLowerCase()
         const isAuthError =
           em.includes('token') || em.includes('refresh') || em.includes('session') ||
           em.includes('jwt') || em.includes('auth') || em.includes('timed out')
+        log('clientErr branch', { em, isAuthError })
         if (isAuthError) {
-          supabase.auth.signOut({ scope: 'local' }).catch(() => {}) // fire-and-forget
+          supabase.auth.signOut({ scope: 'local' }).catch(() => {})
           router.replace('/(auth)/login')
           return
         }
+        log('→ accessStatus=error (Nema veze)')
         setAccessStatus('error')
         return
       }
 
       if (!client) {
+        log('no client row → accessStatus=inactive_client')
         setAccessStatus('inactive_client')
         return
       }
@@ -128,11 +134,11 @@ export default function TabsLayout() {
       if (paramsData) setCheckinParams(paramsData as any)
       if ((client as any).created_at) setClientCreatedAt((client as any).created_at.split('T')[0])
     } catch (e) {
-      // Auth errors (stale SecureStore token, invalid refresh) must route to
-      // login. Use fire-and-forget signOut to avoid awaiting the auth lock.
-      const msg = String((e as Error)?.message ?? '').toLowerCase()
+      const rawMsg = (e as Error)?.message ?? ''
+      const msg = String(rawMsg).toLowerCase()
+      console.error('[runInit CATCH]', { rawMsg, error: e })
       if (msg.includes('token') || msg.includes('refresh') || msg.includes('session') || msg.includes('jwt') || msg.includes('auth')) {
-        supabase.auth.signOut({ scope: 'local' }).catch(() => {}) // fire-and-forget
+        supabase.auth.signOut({ scope: 'local' }).catch(() => {})
         router.replace('/(auth)/login')
       } else {
         setAccessStatus('error')
