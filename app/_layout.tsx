@@ -21,17 +21,30 @@ export default function RootLayout() {
     let aborted = false
 
     // ── Cold-start session validation ────────────────────────────────────────
-    // 10s hard timeout: if getSession/getUser hang on supabase-js auth lock
-    // contention (background _recoverAndRefresh holding the lock on slow
-    // network), we force loading=false and route to login. The `aborted` flag
-    // ensures the original async chain doesn't overwrite state after timeout.
-    // 10s (was 5s) — getUser() is a network call that can legitimately take
-    // 3-4 s on Android cell data; 5s was too tight and caused false sign-outs.
+    // We call ONLY getSession() — not getUser(). Here is why that matters:
+    //
+    // supabase-js v2 uses a single internal mutex (auth lock). Every auth
+    // operation — getSession, getUser (no-jwt), signOut — must acquire it
+    // before it can run. getUser() with no JWT arg makes a NETWORK request
+    // while holding that lock. On Android cold-start the network stack can
+    // take 10-30 s to establish a connection, so getUser() holds the lock
+    // for that entire time. Any subsequent getSession() (e.g. index.tsx,
+    // (tabs)/_layout.tsx) queues and NEVER runs → Step 2 / Step 3 hang.
+    //
+    // getSession() already: reads the session from SecureStore (fast when
+    // the token is not expired) AND refreshes it if needed (one network
+    // call, same lock, but it's the minimum required work). session.user
+    // is populated by getSession, so we don't need getUser() for routing.
+    //
+    // IMPORTANT: the timeout must NOT call signOut({ scope:'local' }) —
+    // signOut also needs the lock. If getSession is slow (expired-token
+    // refresh) and the timeout fires, queueing signOut would also block
+    // index.tsx's getSession() behind it → same deadlock. Instead we just
+    // clear the loading gate without touching the auth state.
     const startupTimeout = setTimeout(() => {
       if (!mounted || aborted) return
       aborted = true
-      console.warn('[startup] session validation timed out — forcing loading=false')
-      supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+      console.warn('[startup] getSession timed out — clearing loading gate (no signOut)')
       setSession(null)
       setLoading(false)
     }, 10000)
@@ -40,22 +53,10 @@ export default function RootLayout() {
       try {
         const { data: { session } } = await supabase.auth.getSession()
         if (!mounted || aborted) return
-
-        if (!session) {
-          clearTimeout(startupTimeout)
-          aborted = true
-          setSession(null)
-          setLoading(false)
-          return
-        }
-
-        const { data: { user }, error: userErr } = await supabase.auth.getUser()
-        if (!mounted || aborted) return
         clearTimeout(startupTimeout)
         aborted = true
 
-        if (userErr || !user) {
-          supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        if (!session?.user) {
           setSession(null)
           setLoading(false)
           return
@@ -80,7 +81,6 @@ export default function RootLayout() {
         if (!mounted) return
         clearTimeout(startupTimeout)
         console.error('[startup CATCH]', { rawMsg: (e as Error)?.message, error: e })
-        supabase.auth.signOut({ scope: 'local' }).catch(() => {}) // fire-and-forget
         setSession(null)
         setLoading(false)
       }
