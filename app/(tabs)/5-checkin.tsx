@@ -643,7 +643,11 @@ export default function CheckinScreen() {
               style={styles.historyBtn}
               activeOpacity={0.75}
             >
-              <Text style={styles.historyBtnText}>{t('ci_progress')}</Text>
+              {/* Split emoji + text — Android drops text after emoji in fontWeight:'600' */}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text>📊</Text>
+                <Text style={styles.historyBtnText}>{t('ci_progress_label')}</Text>
+              </View>
             </TouchableOpacity>
           </View>
           <Text style={styles.headerTitle}>

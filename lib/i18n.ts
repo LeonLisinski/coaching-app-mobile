@@ -153,6 +153,7 @@ export const translations = {
 
     // ── Check-in screen ──────────────────────────────────────────────────────────
     ci_progress:           '📊 Napredak',
+    ci_progress_label:     'Napredak',
     ci_weekly_title:       'Tjedni check-in',
     ci_trainer_comment:    '💬 Komentar trenera',
     ci_late_title:         'Check-in kasni',
@@ -591,6 +592,7 @@ export const translations = {
 
     // ── Check-in screen ───────────────────────────────────────────────────────────
     ci_progress:           '📊 Progress',
+    ci_progress_label:     'Progress',
     ci_weekly_title:       'Weekly check-in',
     ci_trainer_comment:    '💬 Trainer comment',
     ci_late_title:         'Check-in overdue',
