@@ -24,10 +24,17 @@ export default function RootLayout() {
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
         setSession(session)
-        // Register push token in background — must not block the loading gate
+        // Register push token in background — must not block the loading gate.
+        // Use the active row; .maybeSingle keeps us defensive against 0/N rows.
         if (session) {
           supabase
-            .from('clients').select('id').eq('user_id', session.user.id).single()
+            .from('clients')
+            .select('id')
+            .eq('user_id', session.user.id)
+            .eq('active', true)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
             .then(({ data: client }) => {
               if (client) registerForPushNotificationsAsync(client.id)
             })
@@ -53,7 +60,13 @@ export default function RootLayout() {
       // Re-register on every login (token may have rotated)
       if (session) {
         const { data: client } = await supabase
-          .from('clients').select('id').eq('user_id', session.user.id).single()
+          .from('clients')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .eq('active', true)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
         if (client) registerForPushNotificationsAsync(client.id)
       }
     })

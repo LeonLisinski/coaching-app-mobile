@@ -92,16 +92,37 @@ export default function LoginScreen() {
     }
 
     if (authData.user) {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('role, deletion_requested_at')
-        .eq('id', authData.user.id)
-        .single()
-
-      // Role check — only clients can use the mobile app
-      if (profile?.role !== 'client') {
+      // Capability-based gate: allow login if the user has at least one
+      // ACTIVE clients row, regardless of profiles.role. This lets a trainer
+      // who is also a client of someone else use the mobile app.
+      let activeClientCount: number | null = null
+      let profile: { deletion_requested_at: string | null } | null = null
+      try {
+        const [profileResult, clientResult] = await Promise.all([
+          supabase
+            .from('profiles')
+            .select('deletion_requested_at')
+            .eq('id', authData.user.id)
+            .maybeSingle(),
+          supabase
+            .from('clients')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', authData.user.id)
+            .eq('active', true),
+        ])
+        profile = profileResult.data
+        activeClientCount = clientResult.count
+      } catch {
         await supabase.auth.signOut()
-        setErrorMsg('Ova aplikacija je namijenjena klijentima. Treneri koriste web platformu na app.unitlift.com.')
+        setErrorMsg(t('login_err_generic'))
+        setLoginState('error')
+        shakeError()
+        return
+      }
+
+      if (!activeClientCount || activeClientCount < 1) {
+        await supabase.auth.signOut()
+        setErrorMsg('Ovaj račun nema aktivnog trenera u UnitLift sustavu. Kontaktiraj svog trenera ili otvori web platformu na app.unitlift.com.')
         setLoginState('error')
         shakeError()
         return

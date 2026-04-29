@@ -27,14 +27,22 @@ export default function TabsLayout() {
         if (!user) { router.replace('/(auth)/login'); return }
         setUserId(user.id)
 
-        // Fetch client record (include created_at for shared cache)
+        // Fetch the active trainer-client relationship for this user.
+        // A user may have multiple historical rows in `clients` (e.g. switched
+        // trainers over time) but at most ONE active row at any time, enforced
+        // by the partial unique index `clients_one_active_per_user`.
+        // Use limit(1) + maybeSingle to be defensive even if the invariant
+        // is ever violated.
         const { data: client } = await supabase
           .from('clients')
           .select('id, active, trainer_id, created_at')
           .eq('user_id', user.id)
-          .single()
+          .eq('active', true)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
 
-        if (!client || !client.active) {
+        if (!client) {
           setAccessStatus('inactive_client')
           return
         }
