@@ -16,8 +16,14 @@ export default function TabsLayout() {
   const [accessStatus, setAccessStatus] = useState<AccessStatus>('loading')
 
   useEffect(() => {
-    // On timeout redirect to login instead of showing a misleading "account deactivated" screen
-    const timeout = setTimeout(() => router.replace('/(auth)/login'), 15000)
+    // Safety net for RPC/query failures during init. The session itself is
+    // already validated by the root layout (with its own 5s timeout), so this
+    // covers slow trainer subscription RPC, profile fetch, etc.
+    const timeout = setTimeout(async () => {
+      console.warn('[tabs] init timed out — redirecting to login')
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+      router.replace('/(auth)/login')
+    }, 8000)
 
     const init = async () => {
       try {

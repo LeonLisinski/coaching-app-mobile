@@ -17,36 +17,76 @@ export default function RootLayout() {
   const responseListener = useRef<Notifications.EventSubscription | null>(null)
 
   useEffect(() => {
-    // Safety timeout — if getSession() never resolves (e.g. cold-start network error),
-    // force loading=false after 6s so the user isn't stuck on a spinner forever
-    const timeout = setTimeout(() => setLoading(false), 6000)
+    let mounted = true
 
-    supabase.auth.getSession()
-      .then(({ data: { session } }) => {
-        setSession(session)
-        // Register push token in background — must not block the loading gate.
-        // Use the active row; .maybeSingle keeps us defensive against 0/N rows.
-        if (session) {
-          supabase
-            .from('clients')
-            .select('id')
-            .eq('user_id', session.user.id)
-            .eq('active', true)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-            .then(({ data: client }) => {
-              if (client) registerForPushNotificationsAsync(client.id)
-            })
+    // ── Cold-start session validation ────────────────────────────────────────
+    // The root layout used to only call getSession() (a local-storage read).
+    // After a reinstall, iOS Keychain preserves the old session token even if
+    // the user's data is gone. supabase-js then auto-refreshes lazily on the
+    // first network request — and on a cold start the network radio may not
+    // be warm yet, so the refresh hangs and every subsequent query waits.
+    // Validate explicitly here with a hard 5s timeout. If the token is
+    // valid, downstream tab queries fly with a fresh in-memory token. If it's
+    // invalid or the network is dead, we sign out locally and route to login
+    // instead of leaving the user staring at a spinner.
+    const startupTimeout = setTimeout(async () => {
+      if (!mounted) return
+      console.warn('[startup] session validation timed out')
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+      setSession(null)
+      setLoading(false)
+    }, 5000)
+
+    ;(async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession()
+
+        if (!session) {
+          if (!mounted) return
+          clearTimeout(startupTimeout)
+          setSession(null)
+          setLoading(false)
+          return
         }
-      })
-      .catch(() => {
-        // session stays null — user will be redirected to login
-      })
-      .finally(() => {
-        clearTimeout(timeout)
+
+        // getUser() hits Supabase and triggers a token refresh if the access
+        // token is expired. This is the single network call that determines
+        // whether our cached session is still alive.
+        const { data: { user }, error: userErr } = await supabase.auth.getUser()
+        if (!mounted) return
+        clearTimeout(startupTimeout)
+
+        if (userErr || !user) {
+          await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+          setSession(null)
+          setLoading(false)
+          return
+        }
+
+        setSession(session)
         setLoading(false)
-      })
+
+        // Register push token in background — non-blocking, no spinner gate.
+        supabase
+          .from('clients')
+          .select('id')
+          .eq('user_id', session.user.id)
+          .eq('active', true)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+          .then(({ data: client }) => {
+            if (client) registerForPushNotificationsAsync(client.id)
+          })
+      } catch (e) {
+        if (!mounted) return
+        clearTimeout(startupTimeout)
+        console.warn('[startup] session validation error:', e)
+        await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
+        setSession(null)
+        setLoading(false)
+      }
+    })()
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       setSession(session)
@@ -108,6 +148,8 @@ export default function RootLayout() {
     })
 
     return () => {
+      mounted = false
+      clearTimeout(startupTimeout)
       subscription.unsubscribe()
       linkSub.remove()
       notifListener.current?.remove()
