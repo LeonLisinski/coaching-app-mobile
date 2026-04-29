@@ -21,10 +21,12 @@ export default function RootLayout() {
     let aborted = false
 
     // ── Cold-start session validation ────────────────────────────────────────
-    // 5s hard timeout: if getSession/getUser hang on supabase-js auth lock
+    // 10s hard timeout: if getSession/getUser hang on supabase-js auth lock
     // contention (background _recoverAndRefresh holding the lock on slow
     // network), we force loading=false and route to login. The `aborted` flag
     // ensures the original async chain doesn't overwrite state after timeout.
+    // 10s (was 5s) — getUser() is a network call that can legitimately take
+    // 3-4 s on Android cell data; 5s was too tight and caused false sign-outs.
     const startupTimeout = setTimeout(() => {
       if (!mounted || aborted) return
       aborted = true
@@ -32,7 +34,7 @@ export default function RootLayout() {
       supabase.auth.signOut({ scope: 'local' }).catch(() => {})
       setSession(null)
       setLoading(false)
-    }, 5000)
+    }, 10000)
 
     ;(async () => {
       try {

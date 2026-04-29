@@ -14,38 +14,30 @@ export default function Index() {
   useEffect(() => {
     let cancelled = false
 
-    // Hard 4s timeout: if either getSession or AsyncStorage hangs (Android
-    // lock contention with background auto-refresh), default to no-session
-    // and let downstream layers handle it. Without this, the app could be
-    // stuck on this loading screen forever.
-    const timeout = setTimeout(() => {
-      if (cancelled) return
-      console.warn('[index] auth check timed out → routing to login')
-      setHasSession(false)
-      setSeenOnboarding(true)
-      setReady(true)
-    }, 4000)
-
+    // No timeout here — root layout (_layout.tsx) is the single gatekeeper:
+    // it runs getSession + getUser with its own 10s timeout and only unmounts
+    // the loading screen once auth state is settled. By the time index.tsx
+    // mounts, supabase-js auth is done and getSession() returns quickly.
+    // Adding a redundant timeout here caused false "no session" routes to login
+    // because supabase-js was still finishing a background token-storage write.
     Promise.all([
       supabase.auth.getSession(),
       AsyncStorage.getItem(HAS_SEEN_ONBOARDING),
     ])
       .then(([{ data: { session } }, seen]) => {
         if (cancelled) return
-        clearTimeout(timeout)
         setHasSession(!!session)
         setSeenOnboarding(seen === 'true')
         setReady(true)
       })
       .catch(() => {
         if (cancelled) return
-        clearTimeout(timeout)
         setHasSession(false)
         setSeenOnboarding(false)
         setReady(true)
       })
 
-    return () => { cancelled = true; clearTimeout(timeout) }
+    return () => { cancelled = true }
   }, [])
 
   if (!ready) {

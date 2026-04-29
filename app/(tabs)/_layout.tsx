@@ -38,7 +38,21 @@ export default function TabsLayout() {
   const runInit = async () => {
     setAccessStatus('loading')
     try {
-      const { data: { session } } = await supabase.auth.getSession()
+      // After a fresh login supabase-js holds the auth lock while writing new
+      // tokens to Android's encrypted storage. getSession() must wait for that
+      // lock. We give it 12 s; if it times out we show "Nema veze" for retry
+      // instead of silently hanging forever (the previous bug: Step 3 spinner
+      // never resolving) or incorrectly signing the user out.
+      type SR = { data: { session: import('@supabase/supabase-js').Session | null } }
+      const sessionResult: SR | 'timeout' = await Promise.race<SR | 'timeout'>([
+        supabase.auth.getSession() as Promise<SR>,
+        new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 12000)),
+      ])
+      if (sessionResult === 'timeout') {
+        setAccessStatus('error')
+        return
+      }
+      const { data: { session } } = sessionResult
       const user = session?.user
       if (!user) { router.replace('/(auth)/login'); return }
       setUserId(user.id)
@@ -61,9 +75,12 @@ export default function TabsLayout() {
 
       if (clientErr) {
         const em = (clientErr.message ?? '').toLowerCase()
+        // 'timed out' is intentionally excluded: a slow query is a network
+        // issue, not an auth error. Sign-out on timeout caused a login loop
+        // (login → Step 3 → 9s timeout → 'timed out' → signOut → login…).
         const isAuthError =
           em.includes('token') || em.includes('refresh') || em.includes('session') ||
-          em.includes('jwt') || em.includes('auth') || em.includes('timed out')
+          em.includes('jwt') || em.includes('auth')
         if (isAuthError) {
           supabase.auth.signOut({ scope: 'local' }).catch(() => {})
           router.replace('/(auth)/login')
