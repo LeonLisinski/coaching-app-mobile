@@ -41,13 +41,8 @@ export default function RootLayout() {
     }, 5000)
 
     ;(async () => {
-      const t0 = Date.now()
-      const log = (msg: string, extra?: unknown) =>
-        console.log(`[startup +${Date.now() - t0}ms] ${msg}`, extra ?? '')
       try {
-        log('calling getSession()')
         const { data: { session } } = await supabase.auth.getSession()
-        log('getSession() done', { hasSession: !!session })
 
         if (!session) {
           if (!mounted) return
@@ -57,21 +52,17 @@ export default function RootLayout() {
           return
         }
 
-        log('calling getUser() — network')
         const { data: { user }, error: userErr } = await supabase.auth.getUser()
-        log('getUser() done', { hasUser: !!user, errorMessage: userErr?.message })
         if (!mounted) return
         clearTimeout(startupTimeout)
 
         if (userErr || !user) {
-          log('userErr → signOut + login', userErr?.message)
           await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
           setSession(null)
           setLoading(false)
           return
         }
 
-        log('OK → setLoading(false)')
         setSession(session)
         setLoading(false)
 

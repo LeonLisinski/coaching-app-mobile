@@ -7,12 +7,22 @@ import { ActivityIndicator, Platform, Text, TouchableOpacity, View } from 'react
 
 type AccessStatus = 'loading' | 'ok' | 'inactive_client' | 'inactive_trainer' | 'error'
 
-// Wraps a promise: resolves with `fallback` after `ms` instead of hanging.
-// Never rejects — makes the caller safe without per-call try/catch.
-function withFallback<T>(p: Promise<{ data: T | null }>, fallback: T | null, ms: number): Promise<{ data: T | null }> {
+// Wraps a Supabase builder (a thenable, NOT a real Promise — it lacks .catch)
+// in a real Promise that always resolves with either the result or `fallback`.
+// Races against a timeout so a hung query never blocks the UI.
+function withFallback<T>(
+  builder: PromiseLike<{ data: T | null }>,
+  fallback: T | null,
+  ms: number,
+): Promise<{ data: T | null }> {
+  const safe = (async () => {
+    try { return await builder } catch { return { data: fallback } }
+  })()
   return Promise.race([
-    p.catch(() => ({ data: fallback })),
-    new Promise<{ data: T | null }>(resolve => setTimeout(() => resolve({ data: fallback }), ms)),
+    safe,
+    new Promise<{ data: T | null }>(resolve =>
+      setTimeout(() => resolve({ data: fallback }), ms),
+    ),
   ])
 }
 
@@ -26,21 +36,13 @@ export default function TabsLayout() {
   const retryRef = useRef(0)
 
   const runInit = async () => {
-    const t0 = Date.now()
-    const log = (msg: string, extra?: unknown) =>
-      console.log(`[runInit +${Date.now() - t0}ms] ${msg}`, extra ?? '')
-
     setAccessStatus('loading')
-    log('start')
     try {
-      log('calling getSession()')
       const { data: { session } } = await supabase.auth.getSession()
-      log('getSession() done', { hasSession: !!session, userId: session?.user?.id })
       const user = session?.user
-      if (!user) { log('no user → /(auth)/login'); router.replace('/(auth)/login'); return }
+      if (!user) { router.replace('/(auth)/login'); return }
       setUserId(user.id)
 
-      log('querying clients (race, 9s)')
       type ClientRow = { id: string; active: boolean; trainer_id: string; created_at: string }
       type QResult = { data: ClientRow | null; error: { message: string } | null }
       const { data: client, error: clientErr } = await Promise.race<QResult>([
@@ -51,31 +53,27 @@ export default function TabsLayout() {
           .eq('active', true)
           .order('created_at', { ascending: false })
           .limit(1)
-          .maybeSingle() as Promise<QResult>,
+          .maybeSingle() as unknown as Promise<QResult>,
         new Promise<QResult>(resolve =>
           setTimeout(() => resolve({ data: null, error: { message: 'clients query timed out' } }), 9000)
         ),
       ])
-      log('clients query done', { hasClient: !!client, errorMessage: clientErr?.message })
 
       if (clientErr) {
         const em = (clientErr.message ?? '').toLowerCase()
         const isAuthError =
           em.includes('token') || em.includes('refresh') || em.includes('session') ||
           em.includes('jwt') || em.includes('auth') || em.includes('timed out')
-        log('clientErr branch', { em, isAuthError })
         if (isAuthError) {
           supabase.auth.signOut({ scope: 'local' }).catch(() => {})
           router.replace('/(auth)/login')
           return
         }
-        log('→ accessStatus=error (Nema veze)')
         setAccessStatus('error')
         return
       }
 
       if (!client) {
-        log('no client row → accessStatus=inactive_client')
         setAccessStatus('inactive_client')
         return
       }
@@ -91,11 +89,10 @@ export default function TabsLayout() {
         { data: configData },
         { data: paramsData },
       ] = await Promise.all([
-        // RPC with individual timeout — returns null on timeout/error
-        Promise.race([
-          supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }).catch(() => ({ data: null })),
-          new Promise<{ data: null }>(resolve => setTimeout(() => resolve({ data: null }), 7000)),
-        ]),
+        withFallback(
+          supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }) as unknown as PromiseLike<{ data: boolean | null }>,
+          null, 7000
+        ),
         withFallback(
           supabase.from('messages').select('*', { count: 'exact', head: true })
             .eq('client_id', client.id).eq('read', false).neq('sender_id', user.id),
