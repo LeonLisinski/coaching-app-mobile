@@ -96,75 +96,87 @@ export default function HomeScreen() {
       setSelectedParam(numericParams[0])
     }
 
-    // Fetch only dynamic per-day data + fallback static data if context was empty
-    const [
-      { data: checkinData },
-      { data: wpData },
-      { data: mpData },
-      { count: unreadCount },
-      { data: dailyLogData },
-      { data: profileFallback },
-      { data: configFallback },
-      { data: paramsFallback },
-    ] = await Promise.all([
-      supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).single(),
-      supabase.from('client_workout_plans')
-        .select('id, workout_plans(name)')
-        .eq('client_id', cId).eq('active', true).limit(1).single(),
-      supabase.from('client_meal_plans')
-        .select('id, plan_type, meal_plans(name)')
-        .eq('client_id', cId).eq('active', true),
-      supabase.from('messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('client_id', cId).eq('read', false).neq('sender_id', uid),
-      supabase.from('daily_logs')
-        .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).single(),
-      // Fallback fetches — fire only when context cache is empty (first install, error, etc.)
-      cachedProfile
-        ? Promise.resolve({ data: null as typeof cachedProfile | null })
-        : supabase.from('profiles').select('full_name, email').eq('id', uid).single() as any,
-      cachedConfig
-        ? Promise.resolve({ data: null as typeof cachedConfig | null })
-        : supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).single() as any,
-      numericParams.length > 0
-        ? Promise.resolve({ data: null as any })
-        : supabase.from('checkin_parameters').select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index') as any,
-    ])
+    try {
+      // Fetch dynamic per-day data + fallback static data if context was empty.
+      // Use maybeSingle() for queries that might legitimately return 0 rows —
+      // .single() errors on 0 rows and would leave the UI in a stale state.
+      const [
+        { data: checkinData },
+        { data: wpData },
+        { data: mpData },
+        { count: unreadCount },
+        { data: dailyLogData },
+        { data: profileFallback },
+        { data: configFallback },
+        { data: paramsFallback },
+      ] = await Promise.all([
+        supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).maybeSingle(),
+        // maybeSingle: 0 rows (no plan) is valid, .single() would error+return null anyway
+        // but maybeSingle is explicit and doesn't log a PostgREST error
+        supabase.from('client_workout_plans')
+          .select('id, workout_plans(name)')
+          .eq('client_id', cId).eq('active', true).limit(1).maybeSingle(),
+        supabase.from('client_meal_plans')
+          .select('id, plan_type, meal_plans(name)')
+          .eq('client_id', cId).eq('active', true),
+        supabase.from('messages')
+          .select('id', { count: 'exact', head: true })
+          .eq('client_id', cId).eq('read', false).neq('sender_id', uid),
+        supabase.from('daily_logs')
+          .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).maybeSingle(),
+        // Fallback fetches — fire only when context cache is empty
+        cachedProfile
+          ? Promise.resolve({ data: null as typeof cachedProfile | null })
+          : supabase.from('profiles').select('full_name, email').eq('id', uid).maybeSingle() as any,
+        cachedConfig
+          ? Promise.resolve({ data: null as typeof cachedConfig | null })
+          : supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).maybeSingle() as any,
+        numericParams.length > 0
+          ? Promise.resolve({ data: null as any })
+          : supabase.from('checkin_parameters').select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index') as any,
+      ])
 
-    if (!cachedProfile && profileFallback) setProfile(profileFallback)
-    if (!cachedConfig && configFallback) setCheckinConfig(configFallback as any)
+      if (!cachedProfile && profileFallback) setProfile(profileFallback)
+      if (!cachedConfig && configFallback) setCheckinConfig(configFallback as any)
 
-    setTodayCheckin(checkinData)
-    setHasTraining(!!wpData?.id)
-    setHasNutrition((mpData?.length ?? 0) > 0)
+      setTodayCheckin(checkinData)
+      setHasTraining(!!wpData?.id)
+      setHasNutrition((mpData?.length ?? 0) > 0)
 
-    const wpName = (wpData?.workout_plans as any)?.name ?? null
-    if (wpName) setTrainingPlanName(wpName)
+      const wpName = (wpData?.workout_plans as any)?.name ?? null
+      if (wpName) setTrainingPlanName(wpName)
 
-    const mpName = (mpData?.[0]?.meal_plans as any)?.name ?? null
-    if (mpName) setNutritionPlanName(mpName)
+      const mpName = (mpData?.[0]?.meal_plans as any)?.name ?? null
+      if (mpName) setNutritionPlanName(mpName)
 
-    const hasTypedPlans = mpData?.some(
-      (p: any) => p.plan_type === 'training_day' || p.plan_type === 'rest_day'
-    ) ?? false
-    setHasTrainingDayPlan(hasTypedPlans)
+      const hasTypedPlans = mpData?.some(
+        (p: any) => p.plan_type === 'training_day' || p.plan_type === 'rest_day'
+      ) ?? false
+      setHasTrainingDayPlan(hasTypedPlans)
 
-    if (dailyLogData) {
-      setDailyLogId(dailyLogData.id)
-      setIsTrainingDay(dailyLogData.is_training_day ?? null)
-    }
-
-    setUnreadMessages(unreadCount ?? 0)
-    setLoading(false)
-
-    // Determine which params to use for chart (context or fallback)
-    const finalParams = numericParams.length > 0 ? numericParams : (paramsFallback ?? [])
-    if (finalParams.length > 0) {
-      if (numericParams.length === 0) {
-        setCheckinParams(finalParams)
-        setSelectedParam(finalParams[0])
+      if (dailyLogData) {
+        setDailyLogId(dailyLogData.id)
+        setIsTrainingDay(dailyLogData.is_training_day ?? null)
       }
-      loadChartData(cId, finalParams[0]) // intentionally not awaited
+
+      setUnreadMessages(unreadCount ?? 0)
+
+      // Determine which params to use for chart (context or fallback)
+      const finalParams = numericParams.length > 0 ? numericParams : (paramsFallback ?? [])
+      if (finalParams.length > 0) {
+        if (numericParams.length === 0) {
+          setCheckinParams(finalParams)
+          setSelectedParam(finalParams[0])
+        }
+        loadChartData(cId, finalParams[0]) // intentionally not awaited
+      }
+    } catch (e) {
+      // Network error or unexpected rejection — UI shows defaults (Nema plana)
+      // which is safe. User can pull-to-refresh or navigate away and back.
+      console.warn('[home] fetchData error:', e)
+    } finally {
+      // Always clear spinner — no more infinite loading state
+      setLoading(false)
     }
   }
 

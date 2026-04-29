@@ -2,10 +2,19 @@ import { supabase } from '@/lib/supabase'
 import { useClient } from '@/lib/ClientContext'
 import { Tabs, useRouter } from 'expo-router'
 import { ClipboardCheck, Dumbbell, Home, MessageCircle, Salad } from 'lucide-react-native'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Platform, Text, TouchableOpacity, View } from 'react-native'
 
-type AccessStatus = 'loading' | 'ok' | 'inactive_client' | 'inactive_trainer'
+type AccessStatus = 'loading' | 'ok' | 'inactive_client' | 'inactive_trainer' | 'error'
+
+// Wraps a promise: resolves with `fallback` after `ms` instead of hanging.
+// Never rejects — makes the caller safe without per-call try/catch.
+function withFallback<T>(p: Promise<{ data: T | null }>, fallback: T | null, ms: number): Promise<{ data: T | null }> {
+  return Promise.race([
+    p.catch(() => ({ data: fallback })),
+    new Promise<{ data: T | null }>(resolve => setTimeout(() => resolve({ data: fallback }), ms)),
+  ])
+}
 
 export default function TabsLayout() {
   const router = useRouter()
@@ -14,99 +23,91 @@ export default function TabsLayout() {
   const [clientId, setClientId] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
   const [accessStatus, setAccessStatus] = useState<AccessStatus>('loading')
+  const retryRef = useRef(0)
+
+  const runInit = async () => {
+    setAccessStatus('loading')
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      const user = session?.user
+      if (!user) { router.replace('/(auth)/login'); return }
+      setUserId(user.id)
+
+      // Fetch the active trainer-client relationship for this user.
+      const { data: client } = await supabase
+        .from('clients')
+        .select('id, active, trainer_id, created_at')
+        .eq('user_id', user.id)
+        .eq('active', true)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (!client) {
+        setAccessStatus('inactive_client')
+        return
+      }
+
+      // Run all 5 secondary queries in parallel with per-query 7s fallbacks.
+      // The RPC is the most likely to be slow — it falls back to null, which
+      // triggers the "inactive_trainer" screen. Data queries fall back to
+      // empty/null (non-blocking: the individual screens re-fetch on mount).
+      const [
+        rpcResult,
+        { count },
+        { data: profileData },
+        { data: configData },
+        { data: paramsData },
+      ] = await Promise.all([
+        // RPC with individual timeout — returns null on timeout/error
+        Promise.race([
+          supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }).catch(() => ({ data: null })),
+          new Promise<{ data: null }>(resolve => setTimeout(() => resolve({ data: null }), 7000)),
+        ]),
+        withFallback(
+          supabase.from('messages').select('*', { count: 'exact', head: true })
+            .eq('client_id', client.id).eq('read', false).neq('sender_id', user.id),
+          null, 6000
+        ),
+        withFallback(
+          supabase.from('profiles').select('full_name, email').eq('id', user.id).maybeSingle() as any,
+          null, 6000
+        ),
+        withFallback(
+          supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions')
+            .eq('client_id', client.id).maybeSingle() as any,
+          null, 6000
+        ),
+        withFallback(
+          supabase.from('checkin_parameters')
+            .select('id, name, type, unit, options, required, order_index, frequency')
+            .eq('trainer_id', client.trainer_id).order('order_index') as any,
+          [], 6000
+        ),
+      ])
+
+      const trainerActive = (rpcResult as any)?.data
+
+      if (trainerActive !== true) {
+        setAccessStatus('inactive_trainer')
+        return
+      }
+
+      setClientId(client.id)
+      setAccessStatus('ok')
+      setUnreadCount((count as any) ?? 0)
+      setClientData({ clientId: client.id, trainerId: client.trainer_id, userId: user.id })
+      if (profileData) setProfile(profileData as any)
+      if (configData) setCheckinConfig(configData as any)
+      if (paramsData) setCheckinParams(paramsData as any)
+      if ((client as any).created_at) setClientCreatedAt((client as any).created_at.split('T')[0])
+    } catch {
+      setAccessStatus('error')
+    }
+  }
 
   useEffect(() => {
-    // Safety net for RPC/query failures during init. The session itself is
-    // already validated by the root layout (with its own 5s timeout), so this
-    // covers slow trainer subscription RPC, profile fetch, etc.
-    const timeout = setTimeout(async () => {
-      console.warn('[tabs] init timed out — redirecting to login')
-      await supabase.auth.signOut({ scope: 'local' }).catch(() => {})
-      router.replace('/(auth)/login')
-    }, 8000)
-
-    const init = async () => {
-      try {
-        // getSession() reads from device storage — no network latency on startup
-        const { data: { session } } = await supabase.auth.getSession()
-        const user = session?.user
-        if (!user) { router.replace('/(auth)/login'); return }
-        setUserId(user.id)
-
-        // Fetch the active trainer-client relationship for this user.
-        // A user may have multiple historical rows in `clients` (e.g. switched
-        // trainers over time) but at most ONE active row at any time, enforced
-        // by the partial unique index `clients_one_active_per_user`.
-        // Use limit(1) + maybeSingle to be defensive even if the invariant
-        // is ever violated.
-        const { data: client } = await supabase
-          .from('clients')
-          .select('id, active, trainer_id, created_at')
-          .eq('user_id', user.id)
-          .eq('active', true)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-
-        if (!client) {
-          setAccessStatus('inactive_client')
-          return
-        }
-
-        // All independent queries run in parallel — shared cache data piggybacked at no extra cost
-        const [
-          { data: trainerActive },
-          { count },
-          { data: profileData },
-          { data: configData },
-          { data: paramsData },
-        ] = await Promise.all([
-          supabase.rpc('get_trainer_subscription_active', { p_trainer_id: client.trainer_id }),
-          supabase
-            .from('messages')
-            .select('*', { count: 'exact', head: true })
-            .eq('client_id', client.id)
-            .eq('read', false)
-            .neq('sender_id', user.id),
-          supabase
-            .from('profiles')
-            .select('full_name, email')
-            .eq('id', user.id)
-            .single(),
-          supabase
-            .from('checkin_config')
-            .select('checkin_day, photo_frequency, photo_positions')
-            .eq('client_id', client.id)
-            .maybeSingle(),
-          supabase
-            .from('checkin_parameters')
-            .select('id, name, type, unit, options, required, order_index, frequency')
-            .eq('trainer_id', client.trainer_id)
-            .order('order_index'),
-        ])
-
-        if (trainerActive !== true) {
-          setAccessStatus('inactive_trainer')
-          return
-        }
-
-        setClientId(client.id)
-        setAccessStatus('ok')
-        setUnreadCount(count ?? 0)
-        // Populate shared context so all screens can skip their own fetches
-        setClientData({ clientId: client.id, trainerId: client.trainer_id, userId: user.id })
-        if (profileData) setProfile(profileData)
-        if (configData) setCheckinConfig(configData)
-        if (paramsData) setCheckinParams(paramsData)
-        if ((client as any).created_at) setClientCreatedAt((client as any).created_at.split('T')[0])
-      } catch {
-        // Network error on startup — redirect to login so the user isn't stuck
-        router.replace('/(auth)/login')
-      } finally {
-        clearTimeout(timeout)
-      }
-    }
-    init()
+    runInit()
   }, [])
 
   // Subscribe to message changes for live badge updates
@@ -136,6 +137,21 @@ export default function TabsLayout() {
     return (
       <View style={bs.center}>
         <ActivityIndicator size="large" color="#3b82f6" />
+      </View>
+    )
+  }
+
+  if (accessStatus === 'error') {
+    return (
+      <View style={bs.center}>
+        <View style={bs.card}>
+          <Text style={bs.icon}>📡</Text>
+          <Text style={bs.title}>Nema veze</Text>
+          <Text style={bs.sub}>Provjeri internetsku vezu i pokušaj ponovo.</Text>
+          <TouchableOpacity style={bs.btn} onPress={() => { retryRef.current += 1; runInit() }}>
+            <Text style={bs.btnText}>Pokušaj ponovo</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     )
   }
