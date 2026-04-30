@@ -1,13 +1,16 @@
 import * as Linking from 'expo-linking'
 import * as Notifications from 'expo-notifications'
+import * as SecureStore from 'expo-secure-store'
 import { Stack, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
-import { ActivityIndicator, Text, View } from 'react-native'
+import { ActivityIndicator, Platform, Text, View } from 'react-native'
 import { registerForPushNotificationsAsync } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 import { LanguageProvider } from '@/lib/LanguageContext'
 import { ClientProvider } from '@/lib/ClientContext'
 import { Session } from '@supabase/supabase-js'
+// dist/main = CommonJS build, safe for Metro/React Native bundler
+import { STORAGE_KEY as SUPABASE_STORAGE_KEY } from '@supabase/auth-js/dist/main/lib/constants'
 
 export default function RootLayout() {
   const router = useRouter()
@@ -20,63 +23,72 @@ export default function RootLayout() {
     let mounted = true
     let aborted = false
 
-    // ── Cold-start session validation ────────────────────────────────────────
-    // We call ONLY getSession() — not getUser(). Here is why that matters:
+    // ── Cold-start session check ──────────────────────────────────────────────
+    // WHY we read SecureStore directly instead of calling supabase.auth.getSession():
     //
-    // supabase-js v2 uses a single internal mutex (auth lock). Every auth
-    // operation — getSession, getUser (no-jwt), signOut — must acquire it
-    // before it can run. getUser() with no JWT arg makes a NETWORK request
-    // while holding that lock. On Android cold-start the network stack can
-    // take 10-30 s to establish a connection, so getUser() holds the lock
-    // for that entire time. Any subsequent getSession() (e.g. index.tsx,
-    // (tabs)/_layout.tsx) queues and NEVER runs → Step 2 / Step 3 hang.
+    // supabase-js v2's getSession() always awaits `initializePromise` before
+    // returning. initializePromise runs _recoverAndRefresh() which — when the
+    // access token is expired or near-expiry — makes a network request to
+    // refresh it. On Android cold-start the first network round-trip can take
+    // 8-30 s (network stack waking up, slow cell data, etc.). This blocked the
+    // loading screen for the full duration and then left index.tsx hanging too.
     //
-    // getSession() already: reads the session from SecureStore (fast when
-    // the token is not expired) AND refreshes it if needed (one network
-    // call, same lock, but it's the minimum required work). session.user
-    // is populated by getSession, so we don't need getUser() for routing.
+    // The fix: read the session JSON directly from SecureStore. It is a pure
+    // local read (< 100 ms) with no network dependency. We use the same key
+    // that supabase-js uses internally (imported from auth-js constants so it
+    // stays in sync automatically). supabase-js still runs _recoverAndRefresh()
+    // in the background; by the time runInit() in (tabs)/_layout.tsx calls
+    // getSession() the token is usually already refreshed.
     //
-    // IMPORTANT: the timeout must NOT call signOut({ scope:'local' }) —
-    // signOut also needs the lock. If getSession is slow (expired-token
-    // refresh) and the timeout fires, queueing signOut would also block
-    // index.tsx's getSession() behind it → same deadlock. Instead we just
-    // clear the loading gate without touching the auth state.
+    // Web fallback: on web, supabase-js uses localStorage (not SecureStore), so
+    // we fall back to getSession() there — web cold-start does not have the
+    // same Android network-wakeup issue.
     const startupTimeout = setTimeout(() => {
       if (!mounted || aborted) return
       aborted = true
-      console.warn('[startup] getSession timed out — clearing loading gate (no signOut)')
+      console.warn('[startup] storage read timed out — forcing loading=false')
       setSession(null)
       setLoading(false)
-    }, 10000)
+    }, 5000)
 
     ;(async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession()
+        let session: Session | null = null
+
+        if (Platform.OS !== 'web') {
+          const raw = await SecureStore.getItemAsync(SUPABASE_STORAGE_KEY)
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw)
+              if (parsed?.access_token && parsed?.user) session = parsed as Session
+            } catch { /* corrupt stored data — treat as no session */ }
+          }
+        } else {
+          const { data } = await supabase.auth.getSession()
+          session = data.session
+        }
+
         if (!mounted || aborted) return
         clearTimeout(startupTimeout)
         aborted = true
-
-        if (!session?.user) {
-          setSession(null)
-          setLoading(false)
-          return
-        }
 
         setSession(session)
         setLoading(false)
 
         // Register push token in background — non-blocking, no spinner gate.
-        supabase
-          .from('clients')
-          .select('id')
-          .eq('user_id', session.user.id)
-          .eq('active', true)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-          .then(({ data: client }) => {
-            if (client) registerForPushNotificationsAsync(client.id)
-          })
+        if (session?.user) {
+          supabase
+            .from('clients')
+            .select('id')
+            .eq('user_id', session.user.id)
+            .eq('active', true)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+            .then(({ data: client }) => {
+              if (client) registerForPushNotificationsAsync(client.id)
+            })
+        }
       } catch (e) {
         if (!mounted) return
         clearTimeout(startupTimeout)

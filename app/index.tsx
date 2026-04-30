@@ -1,8 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import * as SecureStore from 'expo-secure-store'
 import { supabase } from '@/lib/supabase'
 import { Redirect, type Href } from 'expo-router'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, Text, View } from 'react-native'
+import { ActivityIndicator, Platform, Text, View } from 'react-native'
+// dist/main = CommonJS build, safe for Metro/React Native bundler
+import { STORAGE_KEY as SUPABASE_STORAGE_KEY } from '@supabase/auth-js/dist/main/lib/constants'
 
 const HAS_SEEN_ONBOARDING = 'hasSeenOnboarding'
 
@@ -14,19 +17,24 @@ export default function Index() {
   useEffect(() => {
     let cancelled = false
 
-    // No timeout here — root layout (_layout.tsx) is the single gatekeeper:
-    // it runs getSession + getUser with its own 10s timeout and only unmounts
-    // the loading screen once auth state is settled. By the time index.tsx
-    // mounts, supabase-js auth is done and getSession() returns quickly.
-    // Adding a redundant timeout here caused false "no session" routes to login
-    // because supabase-js was still finishing a background token-storage write.
-    Promise.all([
-      supabase.auth.getSession(),
-      AsyncStorage.getItem(HAS_SEEN_ONBOARDING),
-    ])
-      .then(([{ data: { session } }, seen]) => {
+    // Same reasoning as _layout.tsx: read SecureStore directly instead of
+    // supabase.auth.getSession() to avoid blocking on initializePromise while
+    // supabase-js does a background token refresh on Android cold-start.
+    const readSession =
+      Platform.OS !== 'web'
+        ? SecureStore.getItemAsync(SUPABASE_STORAGE_KEY).then(raw => {
+            if (!raw) return false
+            try {
+              const parsed = JSON.parse(raw)
+              return !!(parsed?.access_token && parsed?.user)
+            } catch { return false }
+          }).catch(() => false)
+        : supabase.auth.getSession().then(({ data: { session } }) => !!session)
+
+    Promise.all([readSession, AsyncStorage.getItem(HAS_SEEN_ONBOARDING)])
+      .then(([hasSession, seen]) => {
         if (cancelled) return
-        setHasSession(!!session)
+        setHasSession(hasSession)
         setSeenOnboarding(seen === 'true')
         setReady(true)
       })

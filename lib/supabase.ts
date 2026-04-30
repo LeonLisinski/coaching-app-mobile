@@ -23,16 +23,6 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
-    // On React Native there is only one JS context (no browser tabs), so the
-    // multi-tab web mutex is unnecessary. supabase-js v2 holds this lock during
-    // every auth operation — including the background _recoverAndRefresh() that
-    // runs on startup — which forces all subsequent getSession() calls to queue
-    // and wait, causing Step 1/2/3 hangs on Android cold-start when the network
-    // is slow. Passing a no-op lock eliminates all queuing while remaining safe
-    // because there is only ever one concurrent writer on mobile.
-    ...(Platform.OS !== 'web' && {
-      lock: (_name: string, _acquireTimeout: number, fn: () => Promise<unknown>) => fn(),
-    }),
   },
 })
 
