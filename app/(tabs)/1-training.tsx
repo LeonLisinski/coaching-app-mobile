@@ -84,6 +84,30 @@ const getWeekEnd = () => {
   return sunday.toISOString().split('T')[0]
 }
 
+const getWeekStartForOffset = (offset: number) => {
+  const now = new Date()
+  const day = now.getDay()
+  const diff = (day === 0 ? -6 : 1 - day) + offset * 7
+  const monday = new Date(now)
+  monday.setDate(now.getDate() + diff)
+  monday.setHours(0, 0, 0, 0)
+  return monday.toISOString().split('T')[0]
+}
+
+const getWeekEndForOffset = (offset: number) => {
+  const start = new Date(getWeekStartForOffset(offset) + 'T00:00:00')
+  const sunday = new Date(start)
+  sunday.setDate(start.getDate() + 6)
+  return sunday.toISOString().split('T')[0]
+}
+
+const formatWeekLabel = (offset: number, locale: string) => {
+  const start = new Date(getWeekStartForOffset(offset) + 'T00:00:00')
+  const end = new Date(getWeekEndForOffset(offset) + 'T00:00:00')
+  const fmt = (d: Date) => `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.`
+  return `${fmt(start)} – ${fmt(end)}`
+}
+
 // ── Rest Timer ────────────────────────────────────────────────────────────────
 function RestTimer({ seconds, endsAt, onDone }: { seconds: number; endsAt: number; onDone: () => void }) {
   const { t } = useLanguage()
@@ -417,6 +441,12 @@ export default function TrainingScreen() {
   const [existingLogId, setExistingLogId] = useState<string | null>(null)
   // True when re-opening an already-completed workout for editing (vs a brand new session)
   const [isEditingExisting, setIsEditingExisting] = useState(false)
+
+  // Week history navigation: 0 = current week, -1 = last week, -2 = 2 weeks ago, -3 = 3 weeks ago
+  const [selectedWeekOffset, setSelectedWeekOffset] = useState(0)
+  const [historicalPlan, setHistoricalPlan] = useState<WorkoutPlan | null>(null)
+  const [historicalCompleted, setHistoricalCompleted] = useState<string[]>([])
+  const [loadingWeek, setLoadingWeek] = useState(false)
   const lastPlanFetchRef = useRef<number>(0)
 
   useEffect(() => { fetchPlan() }, [ctxClient?.clientId])
@@ -532,6 +562,70 @@ export default function TrainingScreen() {
     }, [ctxClient?.clientId, activeDay]),
   )
 
+  const fetchHistoricalWeek = useCallback(async (offset: number) => {
+    if (!plan) return
+    setLoadingWeek(true)
+    try {
+      const weekStart = getWeekStartForOffset(offset)
+      const weekEnd = getWeekEndForOffset(offset)
+
+      const [histAssignedRes, histLogsRes] = await Promise.all([
+        supabase
+          .from('client_workout_plans')
+          .select('workout_plan_id, assigned_at, notes, days, workout_plans(id, name, description, days)')
+          .eq('client_id', plan.client_id)
+          .lte('assigned_at', weekEnd)
+          .or(`ended_at.is.null,ended_at.gte.${weekStart}`)
+          .order('assigned_at', { ascending: false })
+          .limit(1)
+          .single(),
+        supabase
+          .from('workout_logs')
+          .select('day_name, id, date')
+          .eq('client_id', plan.client_id)
+          .gte('date', weekStart)
+          .lte('date', weekEnd),
+      ])
+
+      const histAssigned = histAssignedRes.data
+      const histLogs = histLogsRes.data
+
+      if (histAssigned) {
+        const planData = histAssigned.workout_plans as any
+        const effectiveDays = (histAssigned.days && (histAssigned.days as PlanDay[]).length > 0)
+          ? histAssigned.days as PlanDay[]
+          : planData?.days || []
+        setHistoricalPlan({
+          id: planData?.id ?? plan.id,
+          name: planData?.name ?? plan.name,
+          description: planData?.description ?? plan.description,
+          days: effectiveDays,
+          assigned_at: histAssigned.assigned_at,
+          notes: histAssigned.notes,
+          client_id: plan.client_id,
+          trainer_id: plan.trainer_id,
+        })
+      } else {
+        setHistoricalPlan(plan)
+      }
+      setHistoricalCompleted(histLogs?.map((l: any) => l.day_name) || [])
+    } catch {
+      setHistoricalPlan(plan)
+      setHistoricalCompleted([])
+    } finally {
+      setLoadingWeek(false)
+    }
+  }, [plan])
+
+  useEffect(() => {
+    if (selectedWeekOffset === 0) {
+      setHistoricalPlan(null)
+      setHistoricalCompleted([])
+    } else {
+      fetchHistoricalWeek(selectedWeekOffset)
+    }
+  }, [selectedWeekOffset, plan?.id])
+
   const openDay = async (day: PlanDay) => {
     setSaved(false)
     setExistingLogId(null)
@@ -572,15 +666,18 @@ export default function TrainingScreen() {
     setExerciseLogs(baseLogs)
 
     const today = new Date().toISOString().split('T')[0]
-    const weekStart = getWeekStart()
+    const weekStart = getWeekStartForOffset(selectedWeekOffset)
+    const weekEnd = getWeekEndForOffset(selectedWeekOffset)
+    // For past weeks, use the historical plan's id so we match logs saved with that plan
+    const activePlanId = selectedWeekOffset === 0 ? plan.id : (historicalPlan?.id ?? plan.id)
 
     // Fetch the 2 most recent logs: index 0 = this week (if any), index 1 = previous reference
     const { data: prevLogs } = await supabase
       .from('workout_logs').select('id, exercises, date')
-      .eq('client_id', plan.client_id).eq('plan_id', plan.id).eq('day_name', day.name)
+      .eq('client_id', plan.client_id).eq('plan_id', activePlanId).eq('day_name', day.name)
       .order('date', { ascending: false }).limit(2)
 
-    const thisWeekLog = prevLogs?.find(l => l.date >= weekStart) ?? null
+    const thisWeekLog = prevLogs?.find(l => l.date >= weekStart && l.date <= weekEnd) ?? null
     const referenceLog = prevLogs?.find(l => l.date < weekStart) ?? prevLogs?.[0] ?? null
 
     // "Last session" reference: prefer a log from a PREVIOUS week so it's useful while editing
@@ -615,19 +712,21 @@ export default function TrainingScreen() {
       })
       setExerciseLogs(mergedLogs)
     } else {
-      // Fresh workout this week — try to restore a draft
-      try {
-        const key = `training-draft-${plan.client_id}-${today}-${day.name}`
-        const raw = await AsyncStorage.getItem(key)
-        if (raw) {
-          const draftLogs: ExerciseLog[] = JSON.parse(raw)
-          setExerciseLogs(baseLogs.map(ex => {
-            const d = draftLogs.find(dl => dl.exercise_id === ex.exercise_id)
-            if (!d) return ex
-            return { ...ex, sets: ex.sets.map((s, i) => ({ ...s, ...d.sets[i] })) }
-          }))
-        }
-      } catch {}
+      // Fresh workout — try to restore a draft (only for current week; past weeks don't use drafts)
+      if (selectedWeekOffset === 0) {
+        try {
+          const key = `training-draft-${plan.client_id}-${today}-${day.name}`
+          const raw = await AsyncStorage.getItem(key)
+          if (raw) {
+            const draftLogs: ExerciseLog[] = JSON.parse(raw)
+            setExerciseLogs(baseLogs.map(ex => {
+              const d = draftLogs.find(dl => dl.exercise_id === ex.exercise_id)
+              if (!d) return ex
+              return { ...ex, sets: ex.sets.map((s, i) => ({ ...s, ...d.sets[i] })) }
+            }))
+          }
+        } catch {}
+      }
     }
   }
 
@@ -663,6 +762,9 @@ export default function TrainingScreen() {
     setSaving(true)
 
     const today = new Date().toISOString().split('T')[0]
+    // For past-week retro-logging, use the last day of that week as the log date
+    const logDate = selectedWeekOffset === 0 ? today : getWeekEndForOffset(selectedWeekOffset)
+    const activePlanId = selectedWeekOffset === 0 ? plan.id : (historicalPlan?.id ?? plan.id)
 
     // If a log already exists — update it instead of inserting
     if (existingLogId) {
@@ -675,8 +777,8 @@ export default function TrainingScreen() {
     } else {
       const { error } = await supabase.from('workout_logs').insert({
         client_id: plan.client_id, trainer_id: plan.trainer_id,
-        plan_id: plan.id, day_name: activeDay.name,
-        date: today, exercises: exerciseLogs,
+        plan_id: activePlanId, day_name: activeDay.name,
+        date: logDate, exercises: exerciseLogs,
       })
       if (error) {
         Alert.alert('Greška', error.message)
@@ -687,12 +789,17 @@ export default function TrainingScreen() {
 
     setSaved(true)
     setSavedLogs(exerciseLogs)
-    setCompletedThisWeek(prev =>
-      prev.includes(activeDay.name) ? prev : [...prev, activeDay.name]
-    )
-    // Clear draft after successful save
-    if (plan) {
-      const today = new Date().toISOString().split('T')[0]
+    if (selectedWeekOffset === 0) {
+      setCompletedThisWeek(prev =>
+        prev.includes(activeDay.name) ? prev : [...prev, activeDay.name]
+      )
+    } else {
+      setHistoricalCompleted(prev =>
+        prev.includes(activeDay.name) ? prev : [...prev, activeDay.name]
+      )
+    }
+    // Clear draft after successful save (only relevant for current week)
+    if (plan && selectedWeekOffset === 0) {
       AsyncStorage.removeItem(`training-draft-${plan.client_id}-${today}-${activeDay.name}`).catch(() => {})
     }
     setSaving(false)
@@ -703,11 +810,6 @@ export default function TrainingScreen() {
     await supabase.from('workout_logs').update({ exercises: updatedLogs }).eq('id', existingLogId)
     setSavedLogs(updatedLogs)
     setShowUpdate(false)
-  }
-
-  const getNextDay = () => {
-    if (!plan) return null
-    return plan.days.filter(d => !completedThisWeek.includes(d.name))[0] || null
   }
 
   if (loading) return (
@@ -734,6 +836,10 @@ export default function TrainingScreen() {
       <Text style={styles.emptySub}>{t('train_empty_sub')}</Text>
     </View>
   )
+
+  // Derived: active plan and completed days for selected week
+  const displayPlan = selectedWeekOffset === 0 ? plan : (historicalPlan ?? plan)
+  const displayCompleted = selectedWeekOffset === 0 ? completedThisWeek : historicalCompleted
 
   // ── Active workout session ──
   if (activeDay) {
@@ -906,8 +1012,8 @@ export default function TrainingScreen() {
     )
   }
 
-  const nextDay = getNextDay()
-  const allDone = plan.days.every(d => completedThisWeek.includes(d.name))
+  const nextDay = displayPlan ? displayPlan.days.filter(d => !displayCompleted.includes(d.name))[0] || null : null
+  const allDone = !!displayPlan && displayPlan.days.every(d => displayCompleted.includes(d.name))
 
   // ── Plan overview ──
   return (
@@ -923,15 +1029,42 @@ export default function TrainingScreen() {
             <Text style={styles.historyBtnText}>{t('train_history')}</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.headerTitle}>{plan.name}</Text>
-        {plan.description && <Text style={styles.headerDesc}>{plan.description}</Text>}
+
+        {/* Week navigation */}
+        <View style={styles.weekNav}>
+          <TouchableOpacity
+            onPress={() => setSelectedWeekOffset(o => Math.max(o - 1, -3))}
+            disabled={selectedWeekOffset <= -3}
+            style={[styles.weekNavBtn, selectedWeekOffset <= -3 && styles.weekNavBtnDisabled]}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.weekNavArrow, selectedWeekOffset <= -3 && styles.weekNavArrowDisabled]}>‹</Text>
+          </TouchableOpacity>
+          <View style={{ flex: 1, alignItems: 'center' }}>
+            <Text style={styles.weekNavLabel}>
+              {selectedWeekOffset === 0 ? t('train_this_week') : formatWeekLabel(selectedWeekOffset, locale)}
+            </Text>
+            {loadingWeek && <ActivityIndicator size="small" color="#93c5fd" style={{ marginTop: 2 }} />}
+          </View>
+          <TouchableOpacity
+            onPress={() => setSelectedWeekOffset(o => Math.min(o + 1, 0))}
+            disabled={selectedWeekOffset >= 0}
+            style={[styles.weekNavBtn, selectedWeekOffset >= 0 && styles.weekNavBtnDisabled]}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.weekNavArrow, selectedWeekOffset >= 0 && styles.weekNavArrowDisabled]}>›</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.headerTitle}>{displayPlan?.name}</Text>
+        {displayPlan?.description && <Text style={styles.headerDesc}>{displayPlan.description}</Text>}
         <View style={styles.weekProgress}>
           <View style={styles.weekProgressHeader}>
             <Text style={styles.weekProgressLabel}>{t('train_this_week')}</Text>
-            <Text style={styles.weekProgressCount}>{completedThisWeek.length} / {plan.days.length}</Text>
+            <Text style={styles.weekProgressCount}>{displayCompleted.length} / {displayPlan?.days.length ?? 0}</Text>
           </View>
           <View style={styles.weekProgressBar}>
-            <View style={[styles.weekProgressFill, { width: `${(completedThisWeek.length / plan.days.length) * 100}%` as any }]} />
+            <View style={[styles.weekProgressFill, { width: `${((displayCompleted.length / (displayPlan?.days.length || 1)) * 100)}%` as any }]} />
           </View>
         </View>
       </View>
@@ -939,7 +1072,7 @@ export default function TrainingScreen() {
       {!allDone && nextDay && (
         <TouchableOpacity style={styles.nextDayBanner} onPress={() => openDay(nextDay)} activeOpacity={0.85}>
           <View>
-            <Text style={styles.nextDayLabel}>{t('train_next')}</Text>
+            <Text style={styles.nextDayLabel}>{selectedWeekOffset === 0 ? t('train_next') : (lang === 'en' ? 'Not logged' : 'Nije uneseno')}</Text>
             <Text style={styles.nextDayName}>{nextDay.name}</Text>
             <Text style={styles.nextDayMeta}>{nextDay.exercises.length} {t('train_exercises')}</Text>
           </View>
@@ -952,23 +1085,23 @@ export default function TrainingScreen() {
           <Text style={styles.allDoneIcon}>🏆</Text>
           <View style={{ flex: 1 }}>
             <Text style={styles.allDoneTitle}>{t('train_done_week')}</Text>
-            <Text style={styles.allDoneSub}>{t('train_done_reset')}</Text>
+            <Text style={styles.allDoneSub}>{selectedWeekOffset === 0 ? t('train_done_reset') : (lang === 'en' ? 'All workouts logged for this week' : 'Svi treninzi uneseni za ovaj tjedan')}</Text>
           </View>
         </View>
       )}
 
-      {plan.notes && (
+      {displayPlan?.notes && (
         <View style={styles.notesCard}>
           <Text style={styles.notesLabel}>{t('trainer_note')}</Text>
-          <Text style={styles.notesText}>{plan.notes}</Text>
+          <Text style={styles.notesText}>{displayPlan.notes}</Text>
         </View>
       )}
 
       <Text style={styles.sectionTitle}>{t('train_all')}</Text>
 
-      {plan.days.map((day, dayIdx) => {
-        const isDone = completedThisWeek.includes(day.name)
-        const isNext = nextDay?.name === day.name
+      {(displayPlan?.days ?? []).map((day, dayIdx) => {
+        const isDone = displayCompleted.includes(day.name)
+        const isNext = selectedWeekOffset === 0 && nextDay?.name === day.name
         return (
           <TouchableOpacity
             key={`day-idx-${dayIdx}`}
@@ -1026,6 +1159,16 @@ const styles = StyleSheet.create({
   headerLabel: { fontSize: 12, color: '#93c5fd', fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
   headerTitle: { fontSize: 26, fontWeight: '800', color: 'white', marginBottom: 4 },
   headerDesc: { fontSize: 14, color: '#93c5fd', marginBottom: 16 },
+  weekNav: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 8, marginBottom: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)', borderRadius: 12, paddingVertical: 6, paddingHorizontal: 4,
+  },
+  weekNavBtn: { paddingHorizontal: 12, paddingVertical: 6 },
+  weekNavBtnDisabled: { opacity: 0.3 },
+  weekNavArrow: { fontSize: 22, color: 'white', fontWeight: '700', lineHeight: 26 },
+  weekNavArrowDisabled: { color: 'rgba(255,255,255,0.4)' },
+  weekNavLabel: { fontSize: 13, color: 'white', fontWeight: '700', textAlign: 'center' },
   weekProgress: { marginTop: 8 },
   weekProgressHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
   weekProgressLabel: { fontSize: 12, color: 'rgba(255,255,255,0.7)' },
