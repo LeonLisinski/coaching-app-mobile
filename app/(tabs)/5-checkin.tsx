@@ -131,6 +131,7 @@ export default function CheckinScreen() {
   const [minDate, setMinDate] = useState<string | null>(null)
   const [bootstrapReady, setBootstrapReady] = useState(false)
   const dailyParamsRef = useRef<Parameter[]>([])
+  const lastParamsFetchRef = useRef<number>(0)
   dailyParamsRef.current = dailyParams
   const firstDayLoaded = useRef(false)
   const dayLoadSeq = useRef(0)
@@ -213,10 +214,11 @@ export default function CheckinScreen() {
     return () => { cancelled = true }
   }, [ctxClient])
 
-  // Osvježi zadnji komentar trenera kad korisnik ponovno otvori tab (npr. nakon što trener doda komentar).
+  // Osvježi zadnji komentar trenera i (ako je prošlo 15 min) params/config kad se otvori tab.
   useFocusEffect(
     useCallback(() => {
       const cId = clientId
+      const tId = ctxClient?.trainerId
       if (!cId) return
       let cancelled = false
       ;(async () => {
@@ -235,9 +237,23 @@ export default function CheckinScreen() {
         } else {
           setLatestTrainerComment(null)
         }
+
+        // Silently re-fetch params + config if stale (15 min)
+        if (!tId || Date.now() - lastParamsFetchRef.current <= 15 * 60 * 1000) return
+        const [{ data: paramsData }, { data: configData }] = await Promise.all([
+          supabase.from('checkin_parameters').select('*').eq('trainer_id', tId).order('order_index'),
+          supabase.from('checkin_config').select('checkin_day, photo_frequency, photo_positions').eq('client_id', cId).maybeSingle(),
+        ])
+        if (cancelled) return
+        if (paramsData) {
+          setDailyParams(paramsData.filter((p: Parameter) => p.frequency === 'daily'))
+          setWeeklyParams(paramsData.filter((p: Parameter) => p.frequency === 'weekly'))
+        }
+        if (configData) setConfig(configData as any)
+        lastParamsFetchRef.current = Date.now()
       })()
       return () => { cancelled = true }
-    }, [clientId]),
+    }, [clientId, ctxClient?.trainerId]),
   )
 
   // Load check-in + daily log + drafts for the selected day (up to 3 days back, same window as nutrition).

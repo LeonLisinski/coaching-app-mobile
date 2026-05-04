@@ -2,8 +2,8 @@ import { supabase } from '@/lib/supabase'
 import { useLanguage } from '@/lib/LanguageContext'
 import { useClient } from '@/lib/ClientContext'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { useNavigation, useRouter } from 'expo-router'
-import { useEffect, useRef, useState } from 'react'
+import { useNavigation, useRouter, useFocusEffect } from 'expo-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ActivityIndicator, Alert, Animated, AppState, Keyboard, KeyboardAvoidingView, Linking, Modal,
@@ -417,6 +417,7 @@ export default function TrainingScreen() {
   const [existingLogId, setExistingLogId] = useState<string | null>(null)
   // True when re-opening an already-completed workout for editing (vs a brand new session)
   const [isEditingExisting, setIsEditingExisting] = useState(false)
+  const lastPlanFetchRef = useRef<number>(0)
 
   useEffect(() => { fetchPlan() }, [ctxClient?.clientId])
 
@@ -469,9 +470,8 @@ export default function TrainingScreen() {
     return unsub
   }, [navigation, activeDay])
 
-  const fetchPlan = async () => {
-    setLoadError(false)
-    setLoading(true)
+  const fetchPlan = async (silent = false) => {
+    if (!silent) { setLoadError(false); setLoading(true) }
     // Use shared ClientContext — avoids a redundant clients fetch
     const clientData = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
     if (!clientData) { setLoading(false); return }
@@ -517,11 +517,20 @@ export default function TrainingScreen() {
         notes: assigned.notes, client_id: clientData.id, trainer_id: clientData.trainer_id,
       })
     } catch {
-      setLoadError(true)
+      if (!silent) setLoadError(true)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
+      lastPlanFetchRef.current = Date.now()
     }
   }
+
+  // Silently re-fetch plan if stale (15 min), but never during an active workout session
+  useFocusEffect(
+    useCallback(() => {
+      if (!ctxClient?.clientId || activeDay !== null) return
+      if (Date.now() - lastPlanFetchRef.current > 15 * 60 * 1000) fetchPlan(true)
+    }, [ctxClient?.clientId, activeDay]),
+  )
 
   const openDay = async (day: PlanDay) => {
     setSaved(false)

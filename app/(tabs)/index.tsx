@@ -4,7 +4,7 @@ import { useClient } from '@/lib/ClientContext'
 import { UnitLiftWordmark } from '@/lib/UnitLiftLogo'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { BarChart2, ClipboardCheck, Dumbbell, Salad } from 'lucide-react-native'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator, Dimensions, Modal, ScrollView,
   StyleSheet, Text, TouchableOpacity, View
@@ -67,6 +67,7 @@ export default function HomeScreen() {
   const [showParamPicker, setShowParamPicker] = useState(false)
   const [clientId, setClientId] = useState<string | null>(null)
   const [trainerId, setTrainerId] = useState<string | null>(null)
+  const lastPlanFetchRef = useRef<number>(0)
 
   const [isTrainingDay, setIsTrainingDay] = useState<boolean | null>(null)
   const [dailyLogId, setDailyLogId] = useState<string | null>(null)
@@ -77,7 +78,7 @@ export default function HomeScreen() {
   // Re-run when clientData is populated (context may arrive after first render)
   useEffect(() => { fetchData() }, [clientData?.clientId])
 
-  // Refresh unread count every time Home comes into focus (e.g. after visiting Chat)
+  // Refresh unread count every time Home comes into focus; silently re-fetch plan data if stale (15 min)
   useFocusEffect(
     useCallback(() => {
       if (!clientId || !clientData?.userId) return
@@ -88,14 +89,15 @@ export default function HomeScreen() {
         .eq('read', false)
         .neq('sender_id', clientData.userId)
         .then(({ count }) => setUnreadMessages(count ?? 0))
+      if (Date.now() - lastPlanFetchRef.current > 15 * 60 * 1000) fetchData(true)
     }, [clientId, clientData?.userId]),
   )
 
-  const fetchData = async () => {
+  const fetchData = async (silent = false) => {
     const cId = clientData?.clientId
     const tId = clientData?.trainerId
     const uid = clientData?.userId
-    if (!cId || !tId || !uid) { setLoading(false); return }
+    if (!cId || !tId || !uid) { if (!silent) setLoading(false); return }
 
     setClientId(cId)
     setTrainerId(tId)
@@ -233,7 +235,8 @@ export default function HomeScreen() {
       console.warn('[home] fetchData error:', e)
     } finally {
       // Always clear spinner — no more infinite loading state
-      setLoading(false)
+      if (!silent) setLoading(false)
+      lastPlanFetchRef.current = Date.now()
     }
   }
 

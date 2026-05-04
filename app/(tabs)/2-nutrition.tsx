@@ -3,7 +3,7 @@ import { useLanguage } from '@/lib/LanguageContext'
 import { useClient } from '@/lib/ClientContext'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ActivityIndicator, Alert, KeyboardAvoidingView, Platform,
@@ -86,6 +86,7 @@ export default function NutritionScreen() {
   const [expandedMeal, setExpandedMeal] = useState<string | null>(null)
   const [clientId, setClientId] = useState<string | null>(null)
   const [trainerId, setTrainerId] = useState<string | null>(null)
+  const lastPlanFetchRef = useRef<number>(0)
   const [selectedDate, setSelectedDate] = useState(getToday())
   const [loadingLog, setLoadingLog] = useState(false)
   const [minDate, setMinDate] = useState<string | null>(null)
@@ -144,22 +145,22 @@ export default function NutritionScreen() {
     fetchLogForDate(clientId, selectedDate)
   }, [selectedDate])
 
-  // Re-fetch log whenever screen comes into focus (e.g. returning from history)
+  // Re-fetch log whenever screen comes into focus; silently re-fetch full plan if stale (15 min)
   useFocusEffect(
     useCallback(() => {
       if (!clientId) return
       fetchLogForDate(clientId, selectedDate)
+      if (Date.now() - lastPlanFetchRef.current > 15 * 60 * 1000) fetchData(true)
     }, [clientId, selectedDate]),
   )
 
-  const fetchData = async () => {
-    setLoadError(false)
-    setLoading(true)
+  const fetchData = async (silent = false) => {
+    if (!silent) { setLoadError(false); setLoading(true) }
     // Use shared ClientContext — avoids a redundant clients fetch
     // (created_at is not in context so we fetch a minimal profile if needed)
     const cId = ctxClient?.clientId
     const tId = ctxClient?.trainerId
-    if (!cId || !tId) return setLoading(false)
+    if (!cId || !tId) { if (!silent) setLoading(false); return }
 
     setClientId(cId)
     setTrainerId(tId)
@@ -186,7 +187,7 @@ export default function NutritionScreen() {
         ),
         withTimeoutFallback(
           supabase.from('client_meal_plans')
-            .select('meal_plan_id, assigned_at, notes, plan_type')
+            .select('meal_plan_id, assigned_at, notes, plan_type, calories_target, protein_target, carbs_target, fat_target, meals')
             .eq('client_id', clientData.id).eq('active', true)
             .order('assigned_at', { ascending: false }) as PromiseLike<{ data: any[] | null }>,
           { data: [] },
@@ -248,9 +249,10 @@ export default function NutritionScreen() {
       if (loadedPlan) setPlan(loadedPlan)
       if (loadedAlt) setAltPlan(loadedAlt)
     } catch {
-      setLoadError(true)
+      if (!silent) setLoadError(true)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
+      lastPlanFetchRef.current = Date.now()
     }
   }
 
@@ -290,7 +292,15 @@ export default function NutritionScreen() {
 
     if (!planData) return null
 
-    const meals = (planData.meals || []).map((m: any, i: number) => ({
+    // Prefer client-specific overrides from client_meal_plans when set by trainer
+    const calories_target = assigned.calories_target ?? planData.calories_target
+    const protein_target  = assigned.protein_target  ?? planData.protein_target
+    const carbs_target    = assigned.carbs_target    ?? planData.carbs_target
+    const fat_target      = assigned.fat_target      ?? planData.fat_target
+
+    // Prefer client-specific meals override when set, fall back to base plan meals
+    const rawMeals = (assigned.meals?.length ? assigned.meals : planData.meals) || []
+    const meals = rawMeals.map((m: any, i: number) => ({
       id: `meal-${i}`,
       meal_type: m.meal_type, meal_order: i,
       recipe_id: m.recipe_id || null, recipe_name: m.recipe_name || null,
@@ -308,6 +318,10 @@ export default function NutritionScreen() {
 
     return {
       ...planData,
+      calories_target,
+      protein_target,
+      carbs_target,
+      fat_target,
       plan_type: assigned.plan_type || 'default',
       meals: meals.map((m: any) => ({
         ...m, ingredients: m.recipe_id ? (recipeMap[m.recipe_id]?.length ? recipeMap[m.recipe_id] : (m.foods || [])) : (m.foods || []),
@@ -449,7 +463,7 @@ export default function NutritionScreen() {
       <Text style={{ fontSize: 28, marginBottom: 10 }}>📡</Text>
       <Text style={styles.emptyTitle}>Nema veze</Text>
       <Text style={styles.emptySub}>Pokušaj ponovo za učitavanje prehrane.</Text>
-      <TouchableOpacity style={styles.retryBtn} onPress={fetchData}>
+      <TouchableOpacity style={styles.retryBtn} onPress={() => fetchData()}>
         <Text style={styles.retryBtnText}>Pokušaj ponovo</Text>
       </TouchableOpacity>
     </View>
