@@ -57,6 +57,16 @@ type WorkoutPlan = {
   trainer_id: string
 }
 
+function withTimeoutFallback<T>(builder: PromiseLike<T>, fallback: T, ms = 15000): Promise<T> {
+  const safe = (async () => {
+    try { return await builder } catch { return fallback }
+  })()
+  return Promise.race([
+    safe,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
 const getWeekStart = () => {
   const now = new Date()
   const day = now.getDay()
@@ -385,6 +395,7 @@ export default function TrainingScreen() {
   const locale = lang === 'en' ? 'en' : 'hr'
   const [plan, setPlan] = useState<WorkoutPlan | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [activeDay, setActiveDay] = useState<PlanDay | null>(null)
   const [exerciseLogs, setExerciseLogs] = useState<ExerciseLog[]>([])
   const [lastLogs, setLastLogs] = useState<Record<string, LastLog>>({})
@@ -407,7 +418,7 @@ export default function TrainingScreen() {
   // True when re-opening an already-completed workout for editing (vs a brand new session)
   const [isEditingExisting, setIsEditingExisting] = useState(false)
 
-  useEffect(() => { fetchPlan() }, [])
+  useEffect(() => { fetchPlan() }, [ctxClient?.clientId])
 
   // Auto-save workout draft when navigating away (blur) — only if workout in progress and not saved
   useEffect(() => {
@@ -459,42 +470,57 @@ export default function TrainingScreen() {
   }, [navigation, activeDay])
 
   const fetchPlan = async () => {
+    setLoadError(false)
+    setLoading(true)
     // Use shared ClientContext — avoids a redundant clients fetch
     const clientData = ctxClient ? { id: ctxClient.clientId, trainer_id: ctxClient.trainerId } : null
-    if (!clientData) return setLoading(false)
+    if (!clientData) { setLoading(false); return }
 
-    // Assigned plan (with FK join to workout_plans) + week logs in parallel
-    const [{ data: assigned }, { data: weekLogs }] = await Promise.all([
-      supabase
-        .from('client_workout_plans')
-        .select('workout_plan_id, assigned_at, notes, days, workout_plans(id, name, description, days)')
-        .eq('client_id', clientData.id)
-        .eq('active', true)
-        .order('assigned_at', { ascending: false })
-        .limit(1)
-        .single(),
-      supabase
-        .from('workout_logs').select('day_name, date')
-        .eq('client_id', clientData.id)
-        .gte('date', getWeekStart()).lte('date', getWeekEnd()),
-    ])
+    try {
+      // Assigned plan (with FK join to workout_plans) + week logs in parallel
+      const [assignedRes, weekLogsRes] = await Promise.all([
+        withTimeoutFallback(
+          supabase
+            .from('client_workout_plans')
+            .select('workout_plan_id, assigned_at, notes, days, workout_plans(id, name, description, days)')
+            .eq('client_id', clientData.id)
+            .eq('active', true)
+            .order('assigned_at', { ascending: false })
+            .limit(1)
+            .single() as PromiseLike<{ data: any }>,
+          { data: null },
+        ),
+        withTimeoutFallback(
+          supabase
+            .from('workout_logs').select('day_name, date')
+            .eq('client_id', clientData.id)
+            .gte('date', getWeekStart()).lte('date', getWeekEnd()) as PromiseLike<{ data: any[] | null }>,
+          { data: [] },
+        ),
+      ])
 
-    if (!assigned) return setLoading(false)
-    const planData = assigned.workout_plans as any
-    if (!planData) return setLoading(false)
+      const assigned = assignedRes.data
+      const weekLogs = weekLogsRes.data
+      if (!assigned) return
+      const planData = assigned.workout_plans as any
+      if (!planData) return
 
-    // client_workout_plans.days is a per-client override; if present it takes precedence
-    const effectiveDays = (assigned.days && (assigned.days as PlanDay[]).length > 0)
-      ? assigned.days as PlanDay[]
-      : planData.days || []
+      // client_workout_plans.days is a per-client override; if present it takes precedence
+      const effectiveDays = (assigned.days && (assigned.days as PlanDay[]).length > 0)
+        ? assigned.days as PlanDay[]
+        : planData.days || []
 
-    setCompletedThisWeek(weekLogs?.map((l: any) => l.day_name) || [])
-    setPlan({
-      id: planData.id, name: planData.name, description: planData.description,
-      days: effectiveDays, assigned_at: assigned.assigned_at,
-      notes: assigned.notes, client_id: clientData.id, trainer_id: clientData.trainer_id,
-    })
-    setLoading(false)
+      setCompletedThisWeek(weekLogs?.map((l: any) => l.day_name) || [])
+      setPlan({
+        id: planData.id, name: planData.name, description: planData.description,
+        days: effectiveDays, assigned_at: assigned.assigned_at,
+        notes: assigned.notes, client_id: clientData.id, trainer_id: clientData.trainer_id,
+      })
+    } catch {
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const openDay = async (day: PlanDay) => {
@@ -678,6 +704,17 @@ export default function TrainingScreen() {
   if (loading) return (
     <View style={styles.loadingContainer}>
       <ActivityIndicator size="large" color="#3b82f6" />
+    </View>
+  )
+
+  if (loadError) return (
+    <View style={styles.emptyContainer}>
+      <Text style={{ fontSize: 28, marginBottom: 10 }}>📡</Text>
+      <Text style={styles.emptyTitle}>Nema veze</Text>
+      <Text style={styles.emptySub}>Pokušaj ponovo za učitavanje treninga.</Text>
+      <TouchableOpacity style={styles.primaryBtn} onPress={fetchPlan}>
+        <Text style={styles.primaryBtnText}>Pokušaj ponovo</Text>
+      </TouchableOpacity>
     </View>
   )
 
@@ -962,6 +999,8 @@ const styles = StyleSheet.create({
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
+  primaryBtn: { marginTop: 14, backgroundColor: '#3b82f6', borderRadius: 12, paddingVertical: 11, paddingHorizontal: 18 },
+  primaryBtnText: { color: 'white', fontSize: 14, fontWeight: '700' },
   headerBg: {
     backgroundColor: '#1e3a5f', paddingHorizontal: 20,
     paddingBottom: 24, borderBottomLeftRadius: 28, borderBottomRightRadius: 28, marginBottom: 16,

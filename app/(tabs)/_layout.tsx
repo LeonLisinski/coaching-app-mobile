@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { useClient } from '@/lib/ClientContext'
+import { registerForPushNotificationsAsync } from '@/lib/notifications'
 import { Tabs, useRouter } from 'expo-router'
 import { ClipboardCheck, Dumbbell, Home, MessageCircle, Salad } from 'lucide-react-native'
 import { useEffect, useRef, useState } from 'react'
@@ -38,16 +39,21 @@ export default function TabsLayout() {
   const runInit = async () => {
     setAccessStatus('loading')
     try {
-      // After a fresh login supabase-js holds the auth lock while writing new
-      // tokens to Android's encrypted storage. getSession() must wait for that
-      // lock. We give it 12 s; if it times out we show "Nema veze" for retry
-      // instead of silently hanging forever (the previous bug: Step 3 spinner
-      // never resolving) or incorrectly signing the user out.
+      // Android cold-start can be slower than iOS/web when auth-js is finishing
+      // background session recovery/refresh. Give getSession() one retry before
+      // surfacing an error screen.
       type SR = { data: { session: import('@supabase/supabase-js').Session | null } }
-      const sessionResult: SR | 'timeout' = await Promise.race<SR | 'timeout'>([
+      const readSession = (ms: number) => Promise.race<SR | 'timeout'>([
         supabase.auth.getSession() as Promise<SR>,
-        new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 12000)),
+        new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), ms)),
       ])
+
+      let sessionResult: SR | 'timeout' = await readSession(12000)
+      if (sessionResult === 'timeout') {
+        // Brief pause + second chance (covers slow Android auth warmup).
+        await new Promise(resolve => setTimeout(resolve, 1200))
+        sessionResult = await readSession(20000)
+      }
       if (sessionResult === 'timeout') {
         setAccessStatus('error')
         return
@@ -59,7 +65,7 @@ export default function TabsLayout() {
 
       type ClientRow = { id: string; active: boolean; trainer_id: string; created_at: string }
       type QResult = { data: ClientRow | null; error: { message: string } | null }
-      const { data: client, error: clientErr } = await Promise.race<QResult>([
+      const loadClient = (ms: number) => Promise.race<QResult>([
         supabase
           .from('clients')
           .select('id, active, trainer_id, created_at')
@@ -69,23 +75,26 @@ export default function TabsLayout() {
           .limit(1)
           .maybeSingle() as unknown as Promise<QResult>,
         new Promise<QResult>(resolve =>
-          setTimeout(() => resolve({ data: null, error: { message: 'clients query timed out' } }), 9000)
+          setTimeout(() => resolve({ data: null, error: { message: 'clients query timed out' } }), ms)
         ),
       ])
 
+      let { data: client, error: clientErr } = await loadClient(15000)
+      if (clientErr && (clientErr.message ?? '').toLowerCase().includes('timed out')) {
+        // One retry for slow Android radio wake-up / TLS handshake.
+        await new Promise(resolve => setTimeout(resolve, 1200))
+        const secondTry = await loadClient(15000)
+        client = secondTry.data
+        clientErr = secondTry.error
+      }
+
       if (clientErr) {
-        const em = (clientErr.message ?? '').toLowerCase()
-        // 'timed out' is intentionally excluded: a slow query is a network
-        // issue, not an auth error. Sign-out on timeout caused a login loop
-        // (login → Step 3 → 9s timeout → 'timed out' → signOut → login…).
-        const isAuthError =
-          em.includes('token') || em.includes('refresh') || em.includes('session') ||
-          em.includes('jwt') || em.includes('auth')
-        if (isAuthError) {
-          supabase.auth.signOut({ scope: 'local' }).catch(() => {})
-          router.replace('/(auth)/login')
-          return
-        }
+        // Never sign out here. A query error (including "JWT expired") means
+        // the network or the server had a temporary problem — not that the
+        // refresh token is invalid. Signing out here destroyed the valid
+        // refresh token in SecureStore and caused the "forced login every
+        // time" loop. supabase-js fires SIGNED_OUT automatically when the
+        // refresh token itself is truly invalid; _layout.tsx handles that.
         setAccessStatus('error')
         return
       }
@@ -101,7 +110,7 @@ export default function TabsLayout() {
       // empty/null (non-blocking: the individual screens re-fetch on mount).
       const [
         rpcResult,
-        { count },
+        msgsResult,
         { data: profileData },
         { data: configData },
         { data: paramsData },
@@ -141,22 +150,16 @@ export default function TabsLayout() {
 
       setClientId(client.id)
       setAccessStatus('ok')
-      setUnreadCount((count as any) ?? 0)
+      setUnreadCount((msgsResult as any)?.count ?? 0)
       setClientData({ clientId: client.id, trainerId: client.trainer_id, userId: user.id })
+      registerForPushNotificationsAsync(client.id).catch(() => {})
       if (profileData) setProfile(profileData as any)
       if (configData) setCheckinConfig(configData as any)
       if (paramsData) setCheckinParams(paramsData as any)
       if ((client as any).created_at) setClientCreatedAt((client as any).created_at.split('T')[0])
     } catch (e) {
-      const rawMsg = (e as Error)?.message ?? ''
-      const msg = String(rawMsg).toLowerCase()
-      console.error('[runInit CATCH]', { rawMsg, error: e })
-      if (msg.includes('token') || msg.includes('refresh') || msg.includes('session') || msg.includes('jwt') || msg.includes('auth')) {
-        supabase.auth.signOut({ scope: 'local' }).catch(() => {})
-        router.replace('/(auth)/login')
-      } else {
-        setAccessStatus('error')
-      }
+      console.error('[runInit CATCH]', { rawMsg: (e as Error)?.message, error: e })
+      setAccessStatus('error')
     }
   }
 

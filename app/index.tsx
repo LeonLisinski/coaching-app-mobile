@@ -1,11 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import * as SecureStore from 'expo-secure-store'
-import { supabase } from '@/lib/supabase'
 import { Redirect, type Href } from 'expo-router'
 import { useEffect, useState } from 'react'
-import { ActivityIndicator, Platform, Text, View } from 'react-native'
-// dist/main = CommonJS build, safe for Metro/React Native bundler
-import { STORAGE_KEY as SUPABASE_STORAGE_KEY } from '@supabase/auth-js/dist/main/lib/constants'
+import { ActivityIndicator, Text, View } from 'react-native'
+import { getStartupSession } from '@/lib/startupAuth'
 
 const HAS_SEEN_ONBOARDING = 'hasSeenOnboarding'
 
@@ -17,35 +14,44 @@ export default function Index() {
   useEffect(() => {
     let cancelled = false
 
-    // Same reasoning as _layout.tsx: read SecureStore directly instead of
-    // supabase.auth.getSession() to avoid blocking on initializePromise while
-    // supabase-js does a background token refresh on Android cold-start.
-    const readSession =
-      Platform.OS !== 'web'
-        ? SecureStore.getItemAsync(SUPABASE_STORAGE_KEY).then(raw => {
-            if (!raw) return false
-            try {
-              const parsed = JSON.parse(raw)
-              return !!(parsed?.access_token && parsed?.user)
-            } catch { return false }
-          }).catch(() => false)
-        : supabase.auth.getSession().then(({ data: { session } }) => !!session)
+    // _layout.tsx (root layout, always mounts first) already read the stored
+    // session from SecureStore and wrote the result to startupAuth.ts before
+    // calling setLoading(false) — which is what triggers this component to
+    // mount. Reading that cached boolean here is zero-I/O and cannot hang.
+    //
+    // We do NOT call SecureStore.getItemAsync again: on Android a second
+    // getItemAsync on the same key while supabase-js is concurrently writing
+    // (after a background token refresh) can block indefinitely with no
+    // timeout or rejection, causing Step 2 to spin forever.
+    const hasSession = getStartupSession()
+    const timeout = setTimeout(() => {
+      if (cancelled) return
+      console.warn('[index] timeout fallback')
+      setSeenOnboarding(true)
+      setHasSession(hasSession)
+      setReady(true)
+    }, 3000)
 
-    Promise.all([readSession, AsyncStorage.getItem(HAS_SEEN_ONBOARDING)])
-      .then(([hasSession, seen]) => {
+    AsyncStorage.getItem(HAS_SEEN_ONBOARDING)
+      .then(seen => {
         if (cancelled) return
+        clearTimeout(timeout)
         setHasSession(hasSession)
         setSeenOnboarding(seen === 'true')
         setReady(true)
       })
       .catch(() => {
         if (cancelled) return
-        setHasSession(false)
+        clearTimeout(timeout)
+        setHasSession(hasSession)
         setSeenOnboarding(false)
         setReady(true)
       })
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      clearTimeout(timeout)
+    }
   }, [])
 
   if (!ready) {

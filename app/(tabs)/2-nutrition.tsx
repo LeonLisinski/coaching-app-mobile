@@ -38,6 +38,16 @@ type NutritionLog = {
 
 type MacroInput = { calories: string; protein: string; carbs: string; fat: string }
 
+function withTimeoutFallback<T>(builder: PromiseLike<T>, fallback: T, ms = 15000): Promise<T> {
+  const safe = (async () => {
+    try { return await builder } catch { return fallback }
+  })()
+  return Promise.race([
+    safe,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
 const MEAL_TYPE_LABELS: Record<string, string> = {
   breakfast: 'Doručak', lunch: 'Ručak', dinner: 'Večera', snack: 'Užina',
   pre_workout: 'Pred trening', post_workout: 'Nakon treninga',
@@ -68,6 +78,7 @@ export default function NutritionScreen() {
   const [planMode, setPlanMode] = useState<'training_day' | 'rest_day' | 'default' | null>(null)
   const [isTrainingDay, setIsTrainingDay] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [log, setLog] = useState<NutritionLog | null>(null)
   const [completedMeals, setCompletedMeals] = useState<string[]>([])
   const [macros, setMacros] = useState<MacroInput>({ calories: '', protein: '', carbs: '', fat: '' })
@@ -104,7 +115,8 @@ export default function NutritionScreen() {
   const canGoBack = selectedDate > effectiveMin
   const canGoForward = selectedDate < today
 
-  useEffect(() => { fetchData() }, [])
+  // Re-run when clientData arrives from context (tabs render before data loads)
+  useEffect(() => { fetchData() }, [ctxClient?.clientId])
 
   // Auto-save manually-entered macros to AsyncStorage on blur (meal toggles already saved to DB via upsertLog)
   useEffect(() => {
@@ -141,6 +153,8 @@ export default function NutritionScreen() {
   )
 
   const fetchData = async () => {
+    setLoadError(false)
+    setLoading(true)
     // Use shared ClientContext — avoids a redundant clients fetch
     // (created_at is not in context so we fetch a minimal profile if needed)
     const cId = ctxClient?.clientId
@@ -161,25 +175,35 @@ export default function NutritionScreen() {
     // Alias for the rest of the function body
     const clientData = { id: cId, trainer_id: tId }
 
-    // Round 2: daily_log + meal plans in parallel (both only need clientData.id)
-    const [{ data: dailyLog }, { data: allAssigned }] = await Promise.all([
-      supabase.from('daily_logs')
-        .select('is_training_day')
-        .eq('client_id', clientData.id).eq('date', today).single(),
-      supabase.from('client_meal_plans')
-        .select('meal_plan_id, assigned_at, notes, plan_type')
-        .eq('client_id', clientData.id).eq('active', true)
-        .order('assigned_at', { ascending: false }),
-    ])
+    try {
+      // Round 2: daily_log + meal plans in parallel (both only need clientData.id)
+      const [dailyRes, assignedRes] = await Promise.all([
+        withTimeoutFallback(
+          supabase.from('daily_logs')
+            .select('is_training_day')
+            .eq('client_id', clientData.id).eq('date', today).single() as PromiseLike<{ data: any }>,
+          { data: null },
+        ),
+        withTimeoutFallback(
+          supabase.from('client_meal_plans')
+            .select('meal_plan_id, assigned_at, notes, plan_type')
+            .eq('client_id', clientData.id).eq('active', true)
+            .order('assigned_at', { ascending: false }) as PromiseLike<{ data: any[] | null }>,
+          { data: [] },
+        ),
+      ])
 
-    const todayIsTraining: boolean | null = dailyLog?.is_training_day ?? null
-    setIsTrainingDay(todayIsTraining)
+      const dailyLog = dailyRes.data
+      const allAssigned = assignedRes.data
 
-    if (!allAssigned || allAssigned.length === 0) return setLoading(false)
+      const todayIsTraining: boolean | null = dailyLog?.is_training_day ?? null
+      setIsTrainingDay(todayIsTraining)
 
-    const trainingPlan = allAssigned.find((p: any) => p.plan_type === 'training_day')
-    const restPlan = allAssigned.find((p: any) => p.plan_type === 'rest_day')
-    const defaultPlan = allAssigned.find((p: any) => p.plan_type === 'default' || !p.plan_type)
+      if (!allAssigned || allAssigned.length === 0) return
+
+      const trainingPlan = allAssigned.find((p: any) => p.plan_type === 'training_day')
+      const restPlan = allAssigned.find((p: any) => p.plan_type === 'rest_day')
+      const defaultPlan = allAssigned.find((p: any) => p.plan_type === 'default' || !p.plan_type)
 
     let primaryAssigned = defaultPlan
     let mode: 'training_day' | 'rest_day' | 'default' = 'default'
@@ -201,19 +225,33 @@ export default function NutritionScreen() {
       primaryAssigned = restPlan; mode = 'rest_day'
     }
 
-    setPlanMode(mode)
-    if (!primaryAssigned) return setLoading(false)
+      setPlanMode(mode)
+      if (!primaryAssigned) return
 
-    // Round 3: load primary plan + alt plan + today's log in parallel
-    const [loadedPlan, loadedAlt] = await Promise.all([
-      loadPlanData(primaryAssigned, clientData.id, clientData.trainer_id),
-      altAssigned ? loadPlanData(altAssigned, clientData.id, clientData.trainer_id) : Promise.resolve(null),
-      fetchLogForDate(clientData.id, selectedDate),
-    ])
+      // Round 3: load primary plan + alt plan + today's log in parallel
+      const [loadedPlan, loadedAlt] = await Promise.all([
+        withTimeoutFallback(
+          loadPlanData(primaryAssigned, clientData.id, clientData.trainer_id),
+          null,
+          15000,
+        ),
+        altAssigned
+          ? withTimeoutFallback(
+              loadPlanData(altAssigned, clientData.id, clientData.trainer_id),
+              null,
+              15000,
+            )
+          : Promise.resolve(null),
+        withTimeoutFallback(fetchLogForDate(clientData.id, selectedDate), undefined, 12000),
+      ])
 
-    if (loadedPlan) setPlan(loadedPlan)
-    if (loadedAlt) setAltPlan(loadedAlt)
-    setLoading(false)
+      if (loadedPlan) setPlan(loadedPlan)
+      if (loadedAlt) setAltPlan(loadedAlt)
+    } catch {
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const fetchLogForDate = async (cId: string, date: string) => {
@@ -389,7 +427,7 @@ export default function NutritionScreen() {
     if (!ok) {
       // Server fail — keep draft, surface error so the user can retry
       Alert.alert(
-        t('common_error') || 'Greška',
+        t('error') || 'Greška',
         'Nismo uspjeli potvrditi dan. Provjeri internet i pokušaj ponovo.',
       )
       return
@@ -403,6 +441,17 @@ export default function NutritionScreen() {
   if (loading) return (
     <View style={styles.loadingContainer}>
       <ActivityIndicator size="large" color="#10b981" />
+    </View>
+  )
+
+  if (loadError) return (
+    <View style={styles.emptyContainer}>
+      <Text style={{ fontSize: 28, marginBottom: 10 }}>📡</Text>
+      <Text style={styles.emptyTitle}>Nema veze</Text>
+      <Text style={styles.emptySub}>Pokušaj ponovo za učitavanje prehrane.</Text>
+      <TouchableOpacity style={styles.retryBtn} onPress={fetchData}>
+        <Text style={styles.retryBtnText}>Pokušaj ponovo</Text>
+      </TouchableOpacity>
     </View>
   )
 
@@ -721,6 +770,8 @@ const styles = StyleSheet.create({
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
   emptyTitle: { fontSize: 20, fontWeight: '700', color: '#111827', marginBottom: 8 },
   emptySub: { fontSize: 14, color: '#9ca3af', textAlign: 'center' },
+  retryBtn: { marginTop: 14, backgroundColor: '#10b981', borderRadius: 12, paddingVertical: 11, paddingHorizontal: 18 },
+  retryBtnText: { color: 'white', fontSize: 14, fontWeight: '700' },
 
   headerBg: {
     backgroundColor: '#064e3b', paddingHorizontal: 20,

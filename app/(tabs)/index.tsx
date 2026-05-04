@@ -18,6 +18,22 @@ type TodayCheckin = { id: string } | null
 type CheckinParam = { id: string; name: string; unit: string | null }
 type ChartPoint = { label: string; value: number; date: string }
 
+// Supabase builders are PromiseLike (thenable), not full Promises. Wrap every
+// startup query with timeout + fallback so Home can never spin forever.
+function withTimeoutFallback<T>(
+  builder: PromiseLike<T>,
+  fallback: T,
+  ms = 12000,
+): Promise<T> {
+  const safe = (async () => {
+    try { return await builder } catch { return fallback }
+  })()
+  return Promise.race([
+    safe,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ])
+}
+
 // DAYS_SHORT is now derived from i18n inside the component
 const { width } = Dimensions.get('window')
 const CHART_W = width - 40 - 36 - 16 // screen - padding - yAxis - some margin
@@ -101,40 +117,81 @@ export default function HomeScreen() {
       // Use maybeSingle() for queries that might legitimately return 0 rows —
       // .single() errors on 0 rows and would leave the UI in a stale state.
       const [
-        { data: checkinData },
-        { data: wpData },
-        { data: mpData },
-        { count: unreadCount },
-        { data: dailyLogData },
-        { data: profileFallback },
-        { data: configFallback },
-        { data: paramsFallback },
+        checkinRes,
+        wpRes,
+        mpRes,
+        unreadRes,
+        dailyLogRes,
+        profileRes,
+        configRes,
+        paramsRes,
       ] = await Promise.all([
-        supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).maybeSingle(),
+        withTimeoutFallback(
+          supabase.from('checkins').select('id').eq('client_id', cId).eq('date', today).maybeSingle() as PromiseLike<{ data: TodayCheckin }>,
+          { data: null },
+          12000,
+        ),
         // maybeSingle: 0 rows (no plan) is valid, .single() would error+return null anyway
         // but maybeSingle is explicit and doesn't log a PostgREST error
-        supabase.from('client_workout_plans')
-          .select('id, workout_plans(name)')
-          .eq('client_id', cId).eq('active', true).limit(1).maybeSingle(),
-        supabase.from('client_meal_plans')
-          .select('id, plan_type, meal_plans(name)')
-          .eq('client_id', cId).eq('active', true),
-        supabase.from('messages')
-          .select('id', { count: 'exact', head: true })
-          .eq('client_id', cId).eq('read', false).neq('sender_id', uid),
-        supabase.from('daily_logs')
-          .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).maybeSingle(),
+        withTimeoutFallback(
+          supabase.from('client_workout_plans')
+            .select('id, workout_plans(name)')
+            .eq('client_id', cId).eq('active', true).limit(1).maybeSingle() as PromiseLike<{ data: any }>,
+          { data: null },
+          12000,
+        ),
+        withTimeoutFallback(
+          supabase.from('client_meal_plans')
+            .select('id, plan_type, meal_plans(name)')
+            .eq('client_id', cId).eq('active', true) as PromiseLike<{ data: any[] | null }>,
+          { data: [] },
+          12000,
+        ),
+        withTimeoutFallback(
+          supabase.from('messages')
+            .select('id', { count: 'exact', head: true })
+            .eq('client_id', cId).eq('read', false).neq('sender_id', uid) as PromiseLike<{ count: number | null }>,
+          { count: 0 },
+          12000,
+        ),
+        withTimeoutFallback(
+          supabase.from('daily_logs')
+            .select('id, is_training_day, values').eq('client_id', cId).eq('date', today).maybeSingle() as PromiseLike<{ data: any }>,
+          { data: null },
+          12000,
+        ),
         // Fallback fetches — fire only when context cache is empty
         cachedProfile
           ? Promise.resolve({ data: null as typeof cachedProfile | null })
-          : supabase.from('profiles').select('full_name, email').eq('id', uid).maybeSingle() as any,
+          : withTimeoutFallback(
+              supabase.from('profiles').select('full_name, email').eq('id', uid).maybeSingle() as PromiseLike<{ data: typeof cachedProfile | null }>,
+              { data: null },
+              12000,
+            ),
         cachedConfig
           ? Promise.resolve({ data: null as typeof cachedConfig | null })
-          : supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).maybeSingle() as any,
+          : withTimeoutFallback(
+              supabase.from('checkin_config').select('checkin_day').eq('client_id', cId).maybeSingle() as PromiseLike<{ data: typeof cachedConfig | null }>,
+              { data: null },
+              12000,
+            ),
         numericParams.length > 0
           ? Promise.resolve({ data: null as any })
-          : supabase.from('checkin_parameters').select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index') as any,
+          : withTimeoutFallback(
+              supabase.from('checkin_parameters').select('id, name, unit').eq('trainer_id', tId).eq('type', 'number').order('order_index') as PromiseLike<{ data: any[] | null }>,
+              { data: [] },
+              12000,
+            ),
       ])
+
+      const checkinData = checkinRes.data
+      const wpData = wpRes.data
+      const mpData = mpRes.data
+      const unreadCount = unreadRes.count
+      const dailyLogData = dailyLogRes.data
+      const profileFallback = profileRes.data
+      const configFallback = configRes.data
+      const paramsFallback = paramsRes.data
 
       if (!cachedProfile && profileFallback) setProfile(profileFallback)
       if (!cachedConfig && configFallback) setCheckinConfig(configFallback as any)

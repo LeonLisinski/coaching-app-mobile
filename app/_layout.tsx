@@ -4,13 +4,13 @@ import * as SecureStore from 'expo-secure-store'
 import { Stack, useRouter } from 'expo-router'
 import { useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Platform, Text, View } from 'react-native'
-import { registerForPushNotificationsAsync } from '@/lib/notifications'
 import { supabase } from '@/lib/supabase'
 import { LanguageProvider } from '@/lib/LanguageContext'
 import { ClientProvider } from '@/lib/ClientContext'
 import { Session } from '@supabase/supabase-js'
 // dist/main = CommonJS build, safe for Metro/React Native bundler
 import { STORAGE_KEY as SUPABASE_STORAGE_KEY } from '@supabase/auth-js/dist/main/lib/constants'
+import { setStartupSession } from '@/lib/startupAuth'
 
 export default function RootLayout() {
   const router = useRouter()
@@ -47,6 +47,7 @@ export default function RootLayout() {
       if (!mounted || aborted) return
       aborted = true
       console.warn('[startup] storage read timed out — forcing loading=false')
+      setStartupSession(false)  // tell index.tsx: no session found
       setSession(null)
       setLoading(false)
     }, 5000)
@@ -72,33 +73,23 @@ export default function RootLayout() {
         clearTimeout(startupTimeout)
         aborted = true
 
+        // Cache the result for index.tsx — eliminates a second SecureStore
+        // read on the same key which can deadlock on Android if supabase-js
+        // is concurrently writing (after a background token refresh).
+        setStartupSession(!!(session))
         setSession(session)
         setLoading(false)
-
-        // Register push token in background — non-blocking, no spinner gate.
-        if (session?.user) {
-          supabase
-            .from('clients')
-            .select('id')
-            .eq('user_id', session.user.id)
-            .eq('active', true)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-            .then(({ data: client }) => {
-              if (client) registerForPushNotificationsAsync(client.id)
-            })
-        }
       } catch (e) {
         if (!mounted) return
         clearTimeout(startupTimeout)
         console.error('[startup CATCH]', { rawMsg: (e as Error)?.message, error: e })
+        setStartupSession(false)
         setSession(null)
         setLoading(false)
       }
     })()
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       setSession(session)
 
       // Redirect to login when session is invalidated (expired token, remote sign-out, etc.)
@@ -107,18 +98,6 @@ export default function RootLayout() {
         return
       }
 
-      // Re-register on every login (token may have rotated)
-      if (session) {
-        const { data: client } = await supabase
-          .from('clients')
-          .select('id')
-          .eq('user_id', session.user.id)
-          .eq('active', true)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle()
-        if (client) registerForPushNotificationsAsync(client.id)
-      }
     })
 
     // ── Deep link handler: password reset & invite links ──────────────────────
