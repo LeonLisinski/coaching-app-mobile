@@ -1030,6 +1030,9 @@ export default function TrainingScreen() {
           </TouchableOpacity>
         </View>
 
+        <Text style={styles.headerTitle}>{displayPlan?.name}</Text>
+        {displayPlan?.description && <Text style={styles.headerDesc}>{displayPlan.description}</Text>}
+
         {/* Week navigation */}
         <View style={styles.weekNav}>
           <TouchableOpacity
@@ -1055,9 +1058,6 @@ export default function TrainingScreen() {
             <Text style={[styles.weekNavArrow, selectedWeekOffset >= 0 && styles.weekNavArrowDisabled]}>›</Text>
           </TouchableOpacity>
         </View>
-
-        <Text style={styles.headerTitle}>{displayPlan?.name}</Text>
-        {displayPlan?.description && <Text style={styles.headerDesc}>{displayPlan.description}</Text>}
         <View style={styles.weekProgress}>
           <View style={styles.weekProgressHeader}>
             <Text style={styles.weekProgressLabel}>{t('train_this_week')}</Text>
