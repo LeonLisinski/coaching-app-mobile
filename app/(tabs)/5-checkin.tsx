@@ -418,14 +418,14 @@ export default function CheckinScreen() {
   const pickPhoto = async (position: string) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (status !== 'granted') { Alert.alert(t('error'), t('ci_err_permission_photos')); return }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, quality: 0.8 })
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.8 })
     if (!result.canceled && result.assets[0]) setPhotos(p => ({ ...p, [position]: result.assets[0].uri }))
   }
 
   const takePhoto = async (position: string) => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync()
     if (status !== 'granted') { Alert.alert(t('error'), t('ci_err_permission_cam')); return }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 })
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.8 })
     if (!result.canceled && result.assets[0]) setPhotos(p => ({ ...p, [position]: result.assets[0].uri }))
   }
 
@@ -1054,8 +1054,8 @@ const styles = StyleSheet.create({
   photosGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
   photoCard: { width: '47%' },
   photoLabel: { fontSize: 12, fontWeight: '600', color: '#6b7280', marginBottom: 6, textTransform: 'capitalize' },
-  photoImg: { width: '100%', height: 130, borderRadius: 12, backgroundColor: '#f3f4f6' },
+  photoImg: { width: '100%', aspectRatio: 3 / 4, borderRadius: 12, backgroundColor: '#f3f4f6' },
   photoChangeText: { fontSize: 11, color: '#9ca3af', textAlign: 'center', marginTop: 4 },
-  photoEmpty: { width: '100%', height: 130, borderRadius: 12, borderWidth: 2, borderColor: '#e5e7eb', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', backgroundColor: 'white' },
+  photoEmpty: { width: '100%', aspectRatio: 3 / 4, borderRadius: 12, borderWidth: 2, borderColor: '#e5e7eb', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center', backgroundColor: 'white' },
   photoEmptyText: { fontSize: 12, color: '#9ca3af' },
 })
